@@ -80,6 +80,7 @@ def analisar_portfolio_com_claude(
     capital_disponivel: float,
     client: anthropic.Anthropic,
     screener_texto: str = "",
+    mpt_texto: str = "",
 ) -> dict:
     """Envia o portfólio completo para o Claude e recebe análise estruturada."""
 
@@ -122,6 +123,8 @@ Você sempre responde em português brasileiro.
 Você é direto e prático — não enrola.
 Você considera o custo de oportunidade: manter um ativo ruim significa deixar de alocar em algo melhor.
 """
+
+    mpt_secao = f"\n\n{mpt_texto}" if mpt_texto else ""
 
     user_prompt = f"""Analise meu portfólio completo abaixo e forneça recomendações de gestão de posição.
 
@@ -221,6 +224,24 @@ RESULTADO ESPERADO:
 
 ORDEM DE EXECUÇÃO:
 Numere as operações em sequência lógica. O que fazer primeiro.
+{mpt_secao}
+
+## 📌 CONCLUSÃO — CONTEXTO MACROECONÔMICO, POLÍTICO E FISCAL
+
+Escreva uma conclusão objetiva (máximo 10 linhas) fundamentando a sugestão de otimização com base no cenário atual. Aborde obrigatoriamente:
+
+1. **Cenário macroeconômico global**: juros, inflação, crescimento mundial, Fed/Banco Central, dólar
+2. **Cenário político-fiscal Brasil**: risco fiscal, câmbio BRL/USD, Selic, ambiente político
+3. **Impacto direto no portfólio**: como esse cenário justifica a realocação sugerida (ex: reduzir Brasil, aumentar EUA)
+4. **Urgência**: Alta / Média / Baixa — com justificativa em 1 linha
+
+Formato:
+**O portfólio atual é uma [descrição]** que [avaliação].
+- ✅ [ponto positivo da realocação]
+- ✅ [ponto positivo da realocação]
+- ✅ [ponto positivo da realocação]
+**Contexto macro:** [2-3 linhas sobre juros, Fed, Brasil, fiscal]
+**Urgência:** ALTA/MÉDIA/BAIXA — [justificativa em 1 linha]
 """
 
     response = client.messages.create(

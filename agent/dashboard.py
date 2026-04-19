@@ -18,7 +18,7 @@ from datetime import datetime
 MESES = {
     1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr",
     5: "Mai", 6: "Jun", 7: "Jul", 8: "Ago",
-    9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
 }
 
 
@@ -70,7 +70,7 @@ def gerar_dashboard(
         linha = [bt.retornos_mensais_portfolio.get(ano, {}).get(m) for m in range(1, 13)]
         heatmap_z.append(linha)
     # Altura dinâmica baseada no número de anos
-    heatmap_altura = max(300, len(anos) * 28)
+    heatmap_altura = max(420, len(anos) * 42)
 
     # 3. Retornos anuais
     anos_bar = sorted(bt.retornos_anuais_portfolio.keys())
@@ -334,12 +334,14 @@ def gerar_dashboard(
   <div class="card grid-full">
     <div class="card-title">Retorno Acumulado — Portfólio vs S&P 500</div>
     <div id="chart-curva" class="chart-tall"></div>
+    <div style="font-size:0.72rem;color:#5a7a9a;margin-top:8px;padding:6px 10px;background:#0a1520;border-left:3px solid #1e3a5f;border-radius:0 4px 4px 0;line-height:1.6">💡 <strong style="color:#7eb8f7">Como ler:</strong> A linha azul mostra quanto R$100 investidos no início valeriam hoje com sua estratégia. A linha laranja é o S&P 500. Quando a azul está acima da laranja, seu portfólio está <strong style="color:#00c176">batendo o mercado americano</strong> — isso é alpha positivo.</div>
   </div>
 
   <!-- 2. Heatmap mensal -->
   <div class="card">
-    <div class="card-title">Retornos Mensais (%) — últimos {len(anos)} anos</div>
+    <div class="card-title">Retornos Mensais (%) — Buy & Hold do Portfólio — últimos {len(anos)} anos</div>
     <div id="chart-heatmap" style="width:100%;height:{heatmap_altura}px"></div>
+    <div style="font-size:0.72rem;color:#5a7a9a;margin-top:8px;padding:6px 10px;background:#0a1520;border-left:3px solid #1e3a5f;border-radius:0 4px 4px 0;line-height:1.6">💡 <strong style="color:#7eb8f7">Como ler:</strong> Cada célula mostra o retorno do portfólio naquele mês/ano. 🟢 Verde = mês positivo · 🔴 Vermelho = mês negativo. Quanto mais intenso, maior o movimento. Passe o mouse para ver o valor exato. Padrões sazonais (ex: vários vermelhos no mesmo mês) revelam tendências recorrentes.</div>
   </div>
 
   <!-- 3. Retornos anuais -->
@@ -350,12 +352,14 @@ def gerar_dashboard(
     <!-- 4. Distribuição -->
     <div class="card-title" style="margin-top:20px">Distribuição de Retornos Mensais</div>
     <div id="chart-dist" class="chart"></div>
+    <div style="font-size:0.72rem;color:#5a7a9a;margin-top:8px;padding:6px 10px;background:#0a1520;border-left:3px solid #1e3a5f;border-radius:0 4px 4px 0;line-height:1.6">💡 <strong style="color:#7eb8f7">Como ler:</strong> Cada barra = quantos meses o portfólio teve aquele nível de retorno. 🟢 Verde = meses de ganho · 🔴 Vermelho = meses de perda · Linha laranja = média. Um portfólio saudável tem a maioria das barras à <strong style="color:#00c176">direita do zero</strong>, com poucas perdas extremas.</div>
   </div>
 
   <!-- 5. Factor Scores -->
   <div class="card grid-full">
     <div class="card-title">Factor Scores por Ativo (0–100)</div>
     <div id="chart-factors" class="chart"></div>
+    <div style="font-size:0.72rem;color:#5a7a9a;margin-top:8px;padding:6px 10px;background:#0a1520;border-left:3px solid #1e3a5f;border-radius:0 4px 4px 0;line-height:1.6">💡 <strong style="color:#7eb8f7">Como ler:</strong> Pontuação 0–100 em 4 dimensões para cada ativo. <strong style="color:#7eb8f7">Momentum</strong> = tendência do preço · <strong style="color:#00c176">Valuation</strong> = se está barato ou caro · <strong style="color:#ffa502">Qualidade</strong> = solidez dos fundamentos (ROE, margens, crescimento) · <strong style="color:#ff6b7a">Volatilidade</strong> = nível de risco. O diamante branco é o Score Total. <span style="color:#00c176">≥70 = compra</span> · <span style="color:#ff4757">≤30 = venda</span>.</div>
   </div>
 
   <!-- 6. Tabela de posições -->
@@ -429,38 +433,46 @@ Plotly.newPlot('chart-curva', traces_curva, {{
 }}, {{responsive: true}});
 
 // 2. Heatmap mensal
-Plotly.newPlot('chart-heatmap', [{{
-  z: {json.dumps(heatmap_z)},
-  x: {json.dumps(heatmap_x)},
-  y: {json.dumps(heatmap_y)},
-  type: 'heatmap',
-  colorscale: [
-    [0, '#7b1515'], [0.3, '#b83030'], [0.45, '#3a2a10'],
-    [0.5, '#1a2a1a'], [0.6, '#1a5c2a'], [0.8, '#00a85a'],
-    [1, '#00e87a']
-  ],
-  zmid: 0,
-  text: {json.dumps([[f"{{v:.1f}}%" if v is not None else "" for v in row] for row in heatmap_z])},
-  texttemplate: '%{{text}}',
-  textfont: {{ size: 10 }},
-  showscale: true,
-  colorbar: {{ thickness: 12, tickfont: {{ size: 10 }}, len: 0.8 }},
-  xgap: 2,
-  ygap: 2,
-}}], {{
-  ...layout_base,
-  margin: {{ t: 10, b: 40, l: 55, r: 70 }},
-  yaxis: {{
-    ...layout_base.yaxis,
-    tickfont: {{ size: 11, color: '#a0c0e0' }},
-    autorange: 'reversed',
-  }},
-  xaxis: {{
-    ...layout_base.xaxis,
-    tickfont: {{ size: 11, color: '#a0c0e0' }},
-    side: 'top',
-  }},
-}}, {{responsive: true}});
+(function() {{
+  // Transpõe: zData original é [anos][meses], vira [meses][anos]
+  const zRaw = {json.dumps(heatmap_z)};
+  const anos = {json.dumps(heatmap_y)};
+  const meses = {json.dumps(heatmap_x)};
+  const nAnos = zRaw.length;
+  const nMeses = 12;
+  const zT = Array.from({{length: nMeses}}, (_, m) => zRaw.map(yr => yr[m] !== undefined ? yr[m] : null));
+  const textT = Array.from({{length: nMeses}}, (_, m) =>
+    zRaw.map(yr => {{
+      const v = yr[m];
+      if (v === null || v === undefined) return '';
+      return (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+    }})
+  );
+  Plotly.newPlot('chart-heatmap', [{{
+    z: zT,
+    x: anos,
+    y: meses,
+    type: 'heatmap',
+    colorscale: [
+      [0.0, '#8b0000'], [0.25, '#cc3333'], [0.45, '#553300'],
+      [0.5, '#1a2a1a'], [0.55, '#1a4a1a'], [0.75, '#00884a'], [1.0, '#00cc66']
+    ],
+    zmid: 0, zmin: -15, zmax: 15,
+    text: textT,
+    texttemplate: '%{{text}}',
+    textfont: {{ size: 11, color: '#ffffff', family: 'monospace' }},
+    showscale: true,
+    colorbar: {{ thickness: 14, tickfont: {{ size: 10, color: '#7090b0' }}, ticksuffix: '%' }},
+    xgap: 3, ygap: 3,
+    hovertemplate: '<b>%{{x}} — %{{y}}</b><br>Retorno: %{{z:.1f}}%<extra></extra>',
+  }}], {{
+    ...layout_base,
+    height: 380,
+    margin: {{ t: 10, b: 60, l: 55, r: 80 }},
+    yaxis: {{ ...layout_base.yaxis, tickfont: {{ size: 12, color: '#c0d0e0' }}, autorange: 'reversed' }},
+    xaxis: {{ ...layout_base.xaxis, tickfont: {{ size: 11, color: '#c0d0e0' }}, tickangle: -45, side: 'bottom' }},
+  }}, {{responsive: true}});
+}})();
 
 // 3. Retornos anuais
 Plotly.newPlot('chart-anual', [{{
@@ -470,7 +482,7 @@ Plotly.newPlot('chart-anual', [{{
   marker: {{ color: {json.dumps(cores_bar)} }},
   text: {json.dumps([f"{'+'if v>=0 else ''}{v:.1f}%" for v in vals_bar])},
   textposition: 'outside',
-  textfont: {{ size: 10 }},
+  textfont: {{ size: 10, color: '#ffffff' }},
 }}], {{
   ...layout_base,
   yaxis: {{ ...layout_base.yaxis, ticksuffix: '%' }},
@@ -478,40 +490,65 @@ Plotly.newPlot('chart-anual', [{{
 }}, {{responsive: true}});
 
 // 4. Distribuição
-Plotly.newPlot('chart-dist', [{{
-  x: {json.dumps(todos_retornos)},
-  type: 'histogram',
-  nbinsx: 20,
-  marker: {{ color: '#2a4a7f', line: {{ color: '#7eb8f7', width: 1 }} }},
-  name: 'Freq. Retornos',
-}}, {{
-  x: {json.dumps(todos_retornos)},
-  type: 'violin',
-  side: 'positive',
-  fillcolor: 'rgba(126,184,247,0.1)',
-  line: {{ color: '#7eb8f7', width: 1 }},
-  name: 'Distribuição',
-  yaxis: 'y2',
-}}], {{
-  ...layout_base,
-  xaxis: {{ ...layout_base.xaxis, ticksuffix: '%', title: 'Retorno Mensal (%)' }},
-  yaxis: {{ ...layout_base.yaxis, title: 'Frequência' }},
-  yaxis2: {{ overlaying: 'y', side: 'right', showgrid: false }},
-  margin: {{ t: 10, b: 40, l: 50, r: 50 }},
-  barmode: 'overlay',
-}}, {{responsive: true}});
+(function() {{
+  const allRets = {json.dumps(todos_retornos)};
+  const posRets = allRets.filter(v => v >= 0);
+  const negRets = allRets.filter(v => v < 0);
+  const media = (allRets.reduce((a,b)=>a+b,0)/allRets.length);
+  const melhor = Math.max(...allRets);
+  const pior = Math.min(...allRets);
+  const posPct = Math.round(posRets.length / allRets.length * 100);
+  const subtitle = `📈 ${{posPct}}% meses positivos  ·  Média ${{media >= 0 ? '+' : ''}}${{media.toFixed(1)}}%  ·  Melhor: +${{melhor.toFixed(1)}}%  ·  Pior: ${{pior.toFixed(1)}}%`;
+  Plotly.newPlot('chart-dist', [{{
+    x: negRets,
+    type: 'histogram',
+    nbinsx: 20,
+    marker: {{ color: 'rgba(255,71,87,0.8)', line: {{ color: '#cc2233', width: 1 }} }},
+    name: 'Meses negativos',
+    hovertemplate: 'Retorno: %{{x:.1f}}%<br>Qtd meses: %{{y}}<extra>Negativos</extra>',
+  }}, {{
+    x: posRets,
+    type: 'histogram',
+    nbinsx: 20,
+    marker: {{ color: 'rgba(0,193,118,0.8)', line: {{ color: '#008844', width: 1 }} }},
+    name: 'Meses positivos',
+    hovertemplate: 'Retorno: %{{x:.1f}}%<br>Qtd meses: %{{y}}<extra>Positivos</extra>',
+  }}, {{
+    x: [media, media],
+    y: [0, 50],
+    type: 'scatter',
+    mode: 'lines',
+    line: {{ color: '#ffa502', width: 2, dash: 'dot' }},
+    name: 'Média',
+    hovertemplate: 'Média: %{{x:.1f}}%<extra></extra>',
+  }}], {{
+    ...layout_base,
+    barmode: 'overlay',
+    xaxis: {{ ...layout_base.xaxis, type: 'linear', tickmode: 'array', tickvals: [-25,-20,-15,-10,-5,0,5,10,15,20,25], ticktext: ['-25%','-20%','-15%','-10%','-5%','0%','+5%','+10%','+15%','+20%','+25%'], title: 'Retorno Mensal (%)', range: [-30, 30], zeroline: true, zerolinecolor: '#3a4a5a', zerolinewidth: 2 }},
+    yaxis: {{ ...layout_base.yaxis, title: 'Número de Meses' }},
+    margin: {{ t: 45, b: 50, l: 55, r: 10 }},
+    title: {{ text: subtitle, font: {{ color: '#7090b0', size: 10 }}, x: 0.5, y: 0.97 }},
+    legend: {{ orientation: 'h', y: -0.25, font: {{ size: 10 }} }},
+    shapes: [{{
+      type: 'line', x0: 0, x1: 0, y0: 0, y1: 1,
+      xref: 'x', yref: 'paper',
+      line: {{ color: '#4a6a8a', width: 1, dash: 'dot' }}
+    }}],
+  }}, {{responsive: true}});
+}})();
 
 // 5. Factor Scores — barras agrupadas
 Plotly.newPlot('chart-factors', [
-  {{ x: {json.dumps(tickers_scores)}, y: {json.dumps(scores_mom)},  name: 'Momentum',    type: 'bar', marker: {{ color: '#7eb8f7' }} }},
-  {{ x: {json.dumps(tickers_scores)}, y: {json.dumps(scores_val)},  name: 'Valuation',   type: 'bar', marker: {{ color: '#00c176' }} }},
-  {{ x: {json.dumps(tickers_scores)}, y: {json.dumps(scores_qual)}, name: 'Qualidade',   type: 'bar', marker: {{ color: '#ffa502' }} }},
-  {{ x: {json.dumps(tickers_scores)}, y: {json.dumps(scores_vol)},  name: 'Volatilidade',type: 'bar', marker: {{ color: '#ff6b7a' }} }},
-  {{ x: {json.dumps(tickers_scores)}, y: {json.dumps(scores_total)},name: 'Score Total', type: 'scatter', mode: 'markers',
+  {{ x: {json.dumps([str(t) for t in tickers_scores])}, y: {json.dumps([float(v) for v in scores_mom])},  name: 'Momentum',    type: 'bar', marker: {{ color: '#7eb8f7' }} }},
+  {{ x: {json.dumps([str(t) for t in tickers_scores])}, y: {json.dumps([float(v) for v in scores_val])},  name: 'Valuation',   type: 'bar', marker: {{ color: '#00c176' }} }},
+  {{ x: {json.dumps([str(t) for t in tickers_scores])}, y: {json.dumps([float(v) for v in scores_qual])}, name: 'Qualidade',   type: 'bar', marker: {{ color: '#ffa502' }} }},
+  {{ x: {json.dumps([str(t) for t in tickers_scores])}, y: {json.dumps([float(v) for v in scores_vol])},  name: 'Volatilidade',type: 'bar', marker: {{ color: '#ff6b7a' }} }},
+  {{ x: {json.dumps([str(t) for t in tickers_scores])}, y: {json.dumps([float(v) for v in scores_total])},name: 'Score Total', type: 'scatter', mode: 'markers',
      marker: {{ size: 12, color: '#fff', symbol: 'diamond', line: {{ color: '#7eb8f7', width: 2 }} }} }},
 ], {{
   ...layout_base,
   barmode: 'group',
+  xaxis: {{ ...layout_base.xaxis, type: 'category' }},
   yaxis: {{ ...layout_base.yaxis, range: [0, 105], title: 'Score (0-100)' }},
   shapes: [
     {{ type: 'line', x0: -0.5, x1: {len(tickers_scores)}-0.5, y0: 70, y1: 70, line: {{ color: '#00c176', dash: 'dot', width: 1 }} }},
@@ -640,8 +677,8 @@ def _linha_tabela(r: dict) -> str:
         <span style="color:{cor_score}">{score:.0f}</span>
       </td>
       <td><span class="badge {badge}">{sinal}</span></td>
-      <td style="color:{cor_bt}">{'+'if bt_ret and bt_ret>=0 else ''}{bt_ret:.1f}% if bt_ret is not None else 'N/A'</td>
-      <td style="color:{cor_bh}">{'+'if bt_bh and bt_bh>=0 else ''}{bt_bh:.1f}% if bt_bh is not None else 'N/A'</td>
+      <td style="color:{cor_bt}">{('+' if bt_ret >= 0 else '') + f'{bt_ret:.1f}%' if bt_ret is not None else 'N/A'}</td>
+      <td style="color:{cor_bh}">{('+' if bt_bh >= 0 else '') + f'{bt_bh:.1f}%' if bt_bh is not None else 'N/A'}</td>
     </tr>"""
 
 
@@ -799,13 +836,17 @@ Plotly.newPlot('chart-alocacao', [
      type: 'bar', marker: {{ color: '#ffa502' }} }},
   {{ x: {json.dumps(tickers)}, y: {json.dumps(pesos_rp)}, name: '⚖️ Risk Parity',
      type: 'bar', marker: {{ color: '#00c176' }} }},
+  {{ x: {json.dumps(tickers)}, y: {json.dumps([round(p*100,1) for p in mpt_resultado.get('dls').pesos] if mpt_resultado.get('dls') else [0]*len(tickers))}, name: '🤖 DLS (LSTM)',
+     type: 'bar', marker: {{ color: '#38bdf8' }} }},
+  {{ x: {json.dumps(tickers)}, y: {json.dumps([round(p*100,1) for p in mpt_resultado.get('deepstatarb').pesos] if mpt_resultado.get('deepstatarb') else [0]*len(tickers))}, name: '🧠 DeepStatArb',
+     type: 'bar', marker: {{ color: '#f472b6' }} }},
 ], {{
   paper_bgcolor: '#0d1b2a', plot_bgcolor: '#0a0e1a',
   font: {{ family: 'SF Mono, Fira Code, monospace', color: '#7090b0', size: 11 }},
   barmode: 'group',
-  margin: {{ t: 10, b: 40, l: 50, r: 20 }},
+  margin: {{ t: 10, b: 60, l: 50, r: 20 }},
   yaxis: {{ ticksuffix: '%', gridcolor: '#1a2a3a', title: 'Peso (%)' }},
-  legend: {{ bgcolor: 'rgba(0,0,0,0)', font: {{ size: 10 }}, orientation: 'h', y: -0.2 }},
+  legend: {{ bgcolor: 'rgba(0,0,0,0)', font: {{ size: 10 }}, orientation: 'h', y: -0.25 }},
 }}, {{responsive: true}});
 </script>
 """
@@ -817,6 +858,7 @@ Plotly.newPlot('chart-alocacao', [
       Fronteira Eficiente &amp; Monte Carlo (10.000 portfólios simulados)
     </div>
     <div id="chart-monte-carlo" class="chart-tall"></div>
+    <div style=\"font-size:0.72rem;color:#5a7a9a;margin-top:8px;padding:6px 10px;background:#0a1520;border-left:3px solid #1e3a5f;border-radius:0 4px 4px 0;line-height:1.6\">💡 <strong style=\"color:#7eb8f7\">Como ler:</strong> Cada ponto = um portfólio simulado com pesos aleatórios. Eixo X = volatilidade (risco), Eixo Y = retorno esperado. Cor verde = alto Sharpe. O ideal é o <strong style=\"color:#00c176\">canto superior esquerdo</strong>. Os losangos coloridos são as estratégias otimizadas. A linha branca é a Fronteira Eficiente — portfólios abaixo dela têm uma combinação melhor disponível.</div>
   </div>
 
   <!-- Heatmap Correlações + Alocação -->
@@ -880,7 +922,9 @@ def adicionar_painel_realocacao(
 
     # ── Portfólio SUGERIDO ────────────────────────────────────────
     # Usa pesos do Max Sharpe (MPT) como base
-    ms = mpt_resultado["max_sharpe"]
+    ms = mpt_resultado.get("max_sharpe")
+    if not ms or not hasattr(ms, "tickers") or not ms.tickers:
+        return caminho_html
     mpt_tickers = ms.tickers
     mpt_pesos = [round(p * 100, 1) for p in ms.pesos]
 
@@ -934,9 +978,7 @@ Plotly.newPlot('chart-atual-pizza', [{{
       '#81ecec','#dfe6e9'
     ],
   }},
-  hovertemplate: '%{{label}}<br>Peso: %{{value:.1f}}%<br>P&L: ' +
-    {json.dumps([f"{v:+.1f}%" for v in atual_pnl])}.join(',').split(',')[{json.dumps(list(range(len(atual_tickers))))}.indexOf('%{{label}}')] +
-    '<extra></extra>',
+  hovertemplate: '%{{label}}<br>Peso: %{{value:.1f}}%<extra></extra>',
 }}], {{
   paper_bgcolor: '#0d1b2a',
   font: {{ family: 'SF Mono, Fira Code, monospace', color: '#7090b0', size: 11 }},
@@ -1135,18 +1177,412 @@ Plotly.newPlot('chart-delta-alocacao', [
     return caminho_html
 
 
+
+
+def adicionar_painel_erc(caminho_html: str, mpt_resultado: dict):
+    """
+    Injeta painel comparativo das estratégias.
+    Usa Object.assign() em vez de spread operator (...) para compatibilidade.
+    Injetado como script tag independente no final do body.
+    """
+    import json
+
+    ms  = mpt_resultado.get("max_sharpe")
+    mv  = mpt_resultado.get("min_variancia")
+    rp  = mpt_resultado.get("risk_parity")
+    erc = mpt_resultado.get("erc")
+    mc  = mpt_resultado.get("monte_carlo")
+    if not ms or not mc or not hasattr(ms, "tickers"):
+        return caminho_html
+    dls = mpt_resultado.get("dls")
+    dsa = mpt_resultado.get("deepstatarb")
+
+    estrategias, sharpes, retornos, vols, cores = [], [], [], [], []
+
+    def _add(nome, sharpe, retorno, vol, cor):
+        estrategias.append(nome)
+        sharpes.append(round(sharpe, 3))
+        retornos.append(round(retorno * 100, 1))
+        vols.append(round(vol * 100, 1))
+        cores.append(cor)
+
+    _add("Atual",          mc.sharpe_atual,  mc.retorno_atual,  mc.vol_atual,         "#7090b0")
+    if ms:  _add("Máx. Sharpe",    ms.sharpe,        ms.retorno,        ms.volatilidade,      "#00c176")
+    if mv:  _add("Mín. Variância", mv.sharpe,        mv.retorno,        mv.volatilidade,      "#00b4d8")
+    if rp:  _add("Risk Parity",    rp.sharpe,        rp.retorno,        rp.volatilidade,      "#a78bfa")
+    if erc: _add("ERC",            erc.sharpe,       erc.retorno,       erc.volatilidade,     "#fb923c")
+    if dls: _add("DLS (LSTM)",     dls.sharpe,       dls.retorno,       dls.volatilidade,     "#38bdf8")
+    if dsa: _add("DeepStatArb",    dsa.sharpe,       dsa.retorno,       dsa.volatilidade,     "#f472b6")
+
+    n = len(estrategias)
+    max_idx = sharpes.index(max(sharpes))
+    widths = [3 if i == max_idx else 0 for i in range(n)]
+
+    tickers = ms.tickers
+    def _pesos(port):
+        if not port: return [0.0] * len(tickers)
+        return [round(p * 100, 1) for p in port.pesos]
+
+    pesos_atual = [round(p * 100, 1) for p in ms.pesos_atuais]
+    pesos_ms  = _pesos(ms)
+    pesos_mv  = _pesos(mv)
+    pesos_rp  = _pesos(rp)
+    pesos_erc = _pesos(erc)
+    pesos_dls = _pesos(dls)
+    pesos_dsa = _pesos(dsa)
+
+    INSIGHT = 'style="font-size:0.72rem;color:#5a7a9a;margin-top:8px;padding:6px 10px;background:#0a1520;border-left:3px solid #1e3a5f;border-radius:0 4px 4px 0;line-height:1.6"'
+
+    painel_html = f"""
+  <!-- Painel ERC -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-title">📈 Comparativo de Estratégias — Sharpe, Risco e Alocação</div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+      <div>
+        <div id="chart-erc-sharpe" style="height:320px;"></div>
+        <div style=\"font-size:0.72rem;color:#5a7a9a;margin-top:8px;padding:6px 10px;background:#0a1520;border-left:3px solid #1e3a5f;border-radius:0 4px 4px 0;line-height:1.6\">💡 <strong style=\"color:#7eb8f7\">Como ler (Sharpe Ratio):</strong> Quanto maior a barra, mais eficiente a estratégia. A linha em 1.0 é o benchmark mínimo. A barra com borda verde é a <strong style=\"color:#00c176\">recomendada</strong>.</div>
+      </div>
+      <div>
+        <div id="chart-erc-risco" style="height:320px;"></div>
+        <div style=\"font-size:0.72rem;color:#5a7a9a;margin-top:8px;padding:6px 10px;background:#0a1520;border-left:3px solid #1e3a5f;border-radius:0 4px 4px 0;line-height:1.6\">💡 <strong style=\"color:#7eb8f7\">Como ler (Risk-Return):</strong> Cada ponto = uma estratégia. Eixo X = risco (volatilidade), Eixo Y = retorno esperado. O <strong style=\"color:#00c176\">canto superior esquerdo</strong> é o ideal: alto retorno com baixo risco.</div>
+      </div>
+    </div>
+    <div id="chart-erc-alocacao" style="height:420px; margin-top:12px;"></div>
+  </div>
+"""
+
+    # ── Script com layouts FLAT — sem Object.assign aninhado que causa blank ──
+    script = f"""<script>
+(function() {{
+  var bg = '#0d1b2a', grid = '#1a2a3a';
+  var maxIdx = {max_idx};
+  var estrategias = {json.dumps(estrategias)};
+  var sharpes     = {json.dumps(sharpes)};
+  var retornos    = {json.dumps(retornos)};
+  var vols        = {json.dumps(vols)};
+  var cores       = {json.dumps(cores)};
+  var tickers     = {json.dumps(tickers)};
+
+  // Sharpe Ratio
+  Plotly.newPlot('chart-erc-sharpe', [{{
+    type: 'bar', x: estrategias, y: sharpes,
+    marker: {{
+      color: cores,
+      line: {{ color: cores.map(function(c,i){{ return i===maxIdx?'#ffffff':'transparent'; }}), width: 2 }}
+    }},
+    text: sharpes.map(function(s){{ return s.toFixed(3); }}),
+    textposition: 'outside',
+    textfont: {{ color: '#c0d0e0', size: 11 }},
+    hovertemplate: '<b>%{{x}}</b><br>Sharpe: %{{y:.3f}}<extra></extra>'
+  }}], {{
+    paper_bgcolor: bg, plot_bgcolor: bg,
+    font: {{ family: 'Inter, sans-serif', color: '#c0d0e0', size: 11 }},
+    title: {{ text: 'Sharpe Ratio por Estratégia', font: {{ color: '#c0d0e0', size: 13 }} }},
+    xaxis: {{ type: 'category', gridcolor: grid, tickangle: -30 }},
+    yaxis: {{ title: {{ text: 'Sharpe' }}, gridcolor: grid }},
+    shapes: [{{ type:'line', x0:-0.5, x1:estrategias.length-0.5, y0:1.0, y1:1.0,
+                line:{{ color:'#ffa502', dash:'dot', width:1.5 }} }}],
+    margin: {{ l:50, r:20, t:50, b:80 }}
+  }}, {{responsive:true, displayModeBar:false}});
+
+  // Risk-Return
+  Plotly.newPlot('chart-erc-risco', [{{
+    type: 'scatter', mode: 'markers+text',
+    x: vols, y: retornos, text: estrategias,
+    textposition: 'top center',
+    textfont: {{ size: 10, color: '#c0d0e0' }},
+    marker: {{ color: cores, size: 14, line: {{ color: '#ffffff', width: 1 }} }},
+    hovertemplate: '<b>%{{text}}</b><br>Risco: %{{x:.1f}}%<br>Retorno: %{{y:.1f}}%<extra></extra>'
+  }}], {{
+    paper_bgcolor: bg, plot_bgcolor: bg,
+    font: {{ family: 'Inter, sans-serif', color: '#c0d0e0', size: 11 }},
+    title: {{ text: 'Risk-Return: Retorno × Volatilidade', font: {{ color: '#c0d0e0', size: 13 }} }},
+    xaxis: {{ title: {{ text: 'Volatilidade (%)' }}, gridcolor: grid }},
+    yaxis: {{ title: {{ text: 'Retorno (%)' }}, gridcolor: grid }},
+    margin: {{ l:60, r:20, t:50, b:60 }}
+  }}, {{responsive:true, displayModeBar:false}});
+
+  // Alocação
+  Plotly.newPlot('chart-erc-alocacao', [
+    {{ type:'bar', name:'Atual',          x:tickers, y:{json.dumps(pesos_atual)}, marker:{{ color:'#7090b0' }} }},
+    {{ type:'bar', name:'Máx. Sharpe',   x:tickers, y:{json.dumps(pesos_ms)},   marker:{{ color:'#00c176' }} }},
+    {{ type:'bar', name:'Mín. Variância',x:tickers, y:{json.dumps(pesos_mv)},   marker:{{ color:'#00b4d8' }} }},
+    {{ type:'bar', name:'Risk Parity',   x:tickers, y:{json.dumps(pesos_rp)},   marker:{{ color:'#a78bfa' }} }},
+    {{ type:'bar', name:'ERC',           x:tickers, y:{json.dumps(pesos_erc)},  marker:{{ color:'#fb923c' }} }},
+    {{ type:'bar', name:'DLS (LSTM)',    x:tickers, y:{json.dumps(pesos_dls)},  marker:{{ color:'#38bdf8' }} }},
+    {{ type:'bar', name:'DeepStatArb',   x:tickers, y:{json.dumps(pesos_dsa)},  marker:{{ color:'#f472b6' }} }},
+  ], {{
+    paper_bgcolor: bg, plot_bgcolor: bg,
+    font: {{ family: 'Inter, sans-serif', color: '#c0d0e0', size: 11 }},
+    barmode: 'group',
+    title: {{ text: 'Alocação Sugerida por Estratégia', font: {{ color: '#c0d0e0', size: 13 }} }},
+    xaxis: {{ type: 'category', gridcolor: grid, tickangle: -30 }},
+    yaxis: {{ title: {{ text: 'Peso (%)' }}, gridcolor: grid }},
+    legend: {{ orientation: 'h', y: -0.25, font: {{ size: 10 }} }},
+    margin: {{ l:60, r:20, t:50, b:130 }}
+  }}, {{responsive:true, displayModeBar:false}});
+}})();
+</script>"""
+
+    with open(caminho_html, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    if "chart-erc-sharpe" not in html:
+        if '</div>\n\n<script>' in html:
+            html = html.replace("</div>\n\n<script>",
+                                painel_html + "\n</div>\n\n<script>")
+        else:
+            html = html.replace("</body>", painel_html + "\n</body>")
+        # Wrap in DOMContentLoaded to ensure divs exist before Plotly runs
+        dom_script = script.replace(
+            "<script>\n(function()",
+            "<script>\ndocument.addEventListener('DOMContentLoaded', function() {\n(function()"
+        ).replace(
+            "})();\n</script>",
+            "})();\n}); // DOMContentLoaded\n</script>"
+        )
+        html = html.replace("</body>", dom_script + "\n</body>")
+
+    with open(caminho_html, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    return caminho_html
+
+
+def adicionar_resumo_estrategias(caminho_html: str, mpt_resultado: dict) -> str:
+    """
+    Injeta um painel de resumo executivo com resultado esperado por estratégia.
+    Mostra tabela comparativa e recomendação da estratégia vencedora.
+    """
+    ms  = mpt_resultado.get("max_sharpe")
+    mv  = mpt_resultado.get("min_variancia")
+    rp  = mpt_resultado.get("risk_parity")
+    erc = mpt_resultado.get("erc")
+    mc  = mpt_resultado.get("monte_carlo")
+    if not ms or not mc or not hasattr(ms, "tickers"):
+        return caminho_html
+    dls = mpt_resultado.get("dls")
+    dsa = mpt_resultado.get("deepstatarb")
+
+    def _row(nome, emoji, cor, port, descricao):
+        if not port:
+            return ""
+        ret = port.retorno * 100
+        vol = port.volatilidade * 100
+        sharpe = port.sharpe
+        delta_ret = ret - mc.retorno_atual * 100
+        delta_sharpe = sharpe - mc.sharpe_atual
+        sinal_ret = "▲" if delta_ret > 0 else "▼"
+        sinal_sh = "▲" if delta_sharpe > 0 else "▼"
+        cor_ret = "#00c176" if delta_ret > 0 else "#ff6b7a"
+        cor_sh = "#00c176" if delta_sharpe > 0 else "#ff6b7a"
+        return f"""
+        <tr>
+          <td style="color:{cor};font-weight:700;padding:10px 12px">{emoji} {nome}</td>
+          <td style="padding:10px 12px;color:#c0d0e0;font-size:0.85rem">{descricao}</td>
+          <td style="padding:10px 12px;color:#c0d0e0;text-align:right">{ret:.1f}%</td>
+          <td style="padding:10px 12px;text-align:right;color:{cor_ret}">{sinal_ret} {abs(delta_ret):.1f}%</td>
+          <td style="padding:10px 12px;color:#c0d0e0;text-align:right">{vol:.1f}%</td>
+          <td style="padding:10px 12px;color:#c0d0e0;text-align:right">{sharpe:.3f}</td>
+          <td style="padding:10px 12px;text-align:right;color:{cor_sh}">{sinal_sh} {abs(delta_sharpe):.3f}</td>
+        </tr>"""
+
+    # Encontra estratégia vencedora pelo Sharpe
+    candidatos = [
+        ("Máx. Sharpe", ms), ("Mín. Variância", mv),
+        ("Risk Parity", rp), ("ERC", erc), ("DLS", dls), ("DeepStatArb", dsa)
+    ]
+    vencedor = max([(n, p) for n, p in candidatos if p], key=lambda x: x[1].sharpe)
+    nome_vencedor, port_vencedor = vencedor
+
+    atual_ret = mc.retorno_atual * 100
+    atual_vol = mc.vol_atual * 100
+    atual_sharpe = mc.sharpe_atual
+
+    painel = f"""
+  <!-- Resumo Executivo por Estratégia -->
+  <div class="card" style="grid-column: 1 / -1; margin-top: 8px;">
+    <div class="card-title">📊 Resumo Comparativo — Impacto das Estratégias vs Portfólio Atual</div>
+
+    <!-- KPIs do portfólio atual -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+      <div style="background:#0a1520;border:1px solid #1e3a5f;border-radius:8px;padding:16px;text-align:center">
+        <div style="font-size:0.65rem;color:#4a6a8a;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Retorno Atual / ano</div>
+        <div style="font-size:1.6rem;font-weight:700;color:#7eb8f7">{atual_ret:.1f}%</div>
+      </div>
+      <div style="background:#0a1520;border:1px solid #1e3a5f;border-radius:8px;padding:16px;text-align:center">
+        <div style="font-size:0.65rem;color:#4a6a8a;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Volatilidade Atual</div>
+        <div style="font-size:1.6rem;font-weight:700;color:#ffa502">{atual_vol:.1f}%</div>
+      </div>
+      <div style="background:#0a1520;border:1px solid #1e3a5f;border-radius:8px;padding:16px;text-align:center">
+        <div style="font-size:0.65rem;color:#4a6a8a;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Sharpe Atual</div>
+        <div style="font-size:1.6rem;font-weight:700;color:#a78bfa">{atual_sharpe:.3f}</div>
+      </div>
+    </div>
+
+    <!-- Tabela comparativa -->
+    <table style="width:100%;border-collapse:collapse;font-size:0.8rem;margin-bottom:20px">
+      <thead>
+        <tr style="color:#4a6a8a;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid #1e3a5f">
+          <th style="padding:8px 12px;text-align:left">Estratégia</th>
+          <th style="padding:8px 12px;text-align:left">Filosofia</th>
+          <th style="padding:8px 12px;text-align:right">Retorno/ano</th>
+          <th style="padding:8px 12px;text-align:right">Δ vs Atual</th>
+          <th style="padding:8px 12px;text-align:right">Volatilidade</th>
+          <th style="padding:8px 12px;text-align:right">Sharpe</th>
+          <th style="padding:8px 12px;text-align:right">Δ Sharpe</th>
+        </tr>
+      </thead>
+      <tbody style="color:#c0d0e0">
+        {_row("Máx. Sharpe", "⭐", "#00c176", ms, "Maximiza retorno por unidade de risco")}
+        {_row("Mín. Variância", "🛡️", "#00b4d8", mv, "Minimiza volatilidade da carteira")}
+        {_row("Risk Parity", "⚖️", "#a78bfa", rp, "Equaliza contribuição de risco por ativo")}
+        {_row("ERC", "🎯", "#fb923c", erc, "Equal Risk Contribution — variação do RP")}
+        {_row("DLS (LSTM)", "🤖", "#38bdf8", dls, "Deep Learning — otimiza Sharpe via LSTM")}
+        {_row("DeepStatArb", "🧠", "#f472b6", dsa, "CNN-Transformer — arbitragem estatística")}
+      </tbody>
+    </table>
+
+    <!-- Recomendação vencedora -->
+    <div style="background:linear-gradient(135deg,#0a1a2a,#0d2040);border:1px solid #00c176;border-radius:8px;padding:20px">
+      <div style="font-size:0.65rem;color:#00c176;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:10px">
+        🏆 Estratégia Recomendada — Maior Sharpe Ratio
+      </div>
+      <div style="font-size:1.1rem;font-weight:700;color:#e0f0ff;margin-bottom:8px">{nome_vencedor}</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px">
+        <div style="text-align:center">
+          <div style="font-size:0.65rem;color:#4a6a8a;margin-bottom:4px">Retorno Esperado</div>
+          <div style="font-size:1.2rem;color:#00c176;font-weight:700">{port_vencedor.retorno*100:.1f}%/ano</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:0.65rem;color:#4a6a8a;margin-bottom:4px">Volatilidade</div>
+          <div style="font-size:1.2rem;color:#ffa502;font-weight:700">{port_vencedor.volatilidade*100:.1f}%</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:0.65rem;color:#4a6a8a;margin-bottom:4px">Sharpe Ratio</div>
+          <div style="font-size:1.2rem;color:#7eb8f7;font-weight:700">{port_vencedor.sharpe:.3f}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+"""
+
+    with open(caminho_html, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    if "Retorno Atual / ano" not in html:
+        html = html.replace("</body>", painel + "\n</body>")
+
+    with open(caminho_html, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    return caminho_html
+
+
+
+
+def adicionar_curva_recomendada(caminho_html: str, mpt_resultado: dict, retornos_hist) -> str:
+    """
+    Adiciona ao gráfico de retorno acumulado uma curva simulada do portfólio
+    com a alocação da estratégia vencedora (maior Sharpe).
+    """
+    import json
+    import numpy as np
+
+    try:
+        # Encontra estratégia vencedora
+        candidatos = [
+            ("Máx. Sharpe", mpt_resultado.get("max_sharpe")),
+            ("DLS", mpt_resultado.get("dls")),
+            ("ERC", mpt_resultado.get("erc")),
+            ("Risk Parity", mpt_resultado.get("risk_parity")),
+        ]
+        candidatos = [(n, p) for n, p in candidatos if p is not None]
+        if not candidatos:
+            return caminho_html
+
+        nome_venc, port_venc = max(candidatos, key=lambda x: x[1].sharpe)
+        tickers = port_venc.tickers
+        pesos = np.array(port_venc.pesos)
+
+        # Alinha retornos históricos com os tickers do portfólio
+        retornos_alinhados = retornos_hist[tickers].dropna()
+        if retornos_alinhados.empty:
+            return caminho_html
+
+        # Calcula retorno diário do portfólio recomendado
+        ret_diario = (retornos_alinhados * pesos).sum(axis=1)
+        curva_recomendada = (1 + ret_diario).cumprod() * 100
+        datas = [str(d.date()) for d in curva_recomendada.index]
+        vals = [round(float(v), 2) for v in curva_recomendada.values]
+
+        # Injeta a curva no gráfico existente via JS
+        script = f"""<script>
+// Adiciona curva do portfólio recomendado ao gráfico de retorno acumulado
+(function() {{
+  const datas_rec = {json.dumps(datas)};
+  const vals_rec = {json.dumps(vals)};
+  const trace_rec = {{
+    x: datas_rec,
+    y: vals_rec,
+    name: '🏆 {nome_venc} (recomendado)',
+    type: 'scatter', mode: 'lines',
+    line: {{ color: '#00c176', width: 2, dash: 'dash' }},
+  }};
+  const chart = document.getElementById('chart-curva');
+  if (chart && chart.data) {{
+    Plotly.addTraces('chart-curva', trace_rec);
+  }} else {{
+    setTimeout(() => {{ Plotly.addTraces('chart-curva', trace_rec); }}, 1000);
+  }}
+}})();
+</script>"""
+
+        with open(caminho_html, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        if "portfólio recomendado" not in html:
+            # Wrap in DOMContentLoaded to ensure divs exist before Plotly runs
+            dom_script = script.replace(
+            "<script>\n(function()",
+            "<script>\ndocument.addEventListener('DOMContentLoaded', function() {\n(function()"
+            ).replace(
+                "})();\n</script>",
+                "})();\n}); // DOMContentLoaded\n</script>"
+            )
+            html = html.replace("</body>", dom_script + "\n</body>")
+
+        with open(caminho_html, "w", encoding="utf-8") as f:
+            f.write(html)
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[curva recomendada] {e}")
+
+    return caminho_html
+
 def adicionar_plano_realocacao_html(caminho_html: str, analise_texto: str):
     """
     Extrai o plano de realocação do texto do Claude e renderiza
     como seção HTML formatada no dashboard.
     """
-    if not analise_texto or "PLANO DE REALOCAÇÃO" not in analise_texto:
+    if not analise_texto:
         return caminho_html
 
-    # Extrai seção do plano
-    idx = analise_texto.find("PLANO DE REALOCAÇÃO")
+    # Tenta encontrar a seção do plano de realocação
+    idx = -1
+    for marcador in ["PLANO DE REALOCAÇÃO", "Plano de Realocação", "📋 PLANO", "PLANO DE REALOAÇÃO"]:
+        idx = analise_texto.find(marcador)
+        if idx != -1:
+            break
+
+    # Se não encontrar plano, tenta conclusão
     if idx == -1:
-        idx = analise_texto.find("Plano de Realocação")
+        for marcador in ["CONCLUSÃO", "## CONCLUSÃO", "CONCLUSAO FINAL", "## Conclusão"]:
+            idx = analise_texto.find(marcador)
+            if idx != -1:
+                break
+
     if idx == -1:
         return caminho_html
 
@@ -1258,7 +1694,7 @@ def adicionar_plano_realocacao_html(caminho_html: str, analise_texto: str):
     <div style="font-size:0.65rem;color:#4a6a8a;text-transform:uppercase;
                 letter-spacing:0.12em;margin-bottom:16px;border-bottom:1px solid #1e3a5f;
                 padding-bottom:8px">
-      📋 Plano de Realocação — Detalhado (gerado pelo Claude)
+      🤖 Análise e Plano de Realocação — Gerado pelo Claude AI
     </div>
     <div style="max-width:1100px">
       {plano_html_content}

@@ -174,4 +174,10 @@ def carregar_portfolio(caminho_csv: str) -> pd.DataFrame:
     df = df[df["quantidade"] > 0].copy()
     df["ticker"] = df["ticker"].str.upper()
 
+    # Garante coluna data_compra (pode não existir em CSVs antigos)
+    if "data_compra" not in df.columns:
+        df["data_compra"] = None
+        print("  ⚠️  portfolio.csv sem coluna 'data_compra' — backtest usará histórico completo.")
+        print("     Adicione 'data_compra' para backtest preciso desde a data de compra real.")
+
     return df, capital_disponivel
