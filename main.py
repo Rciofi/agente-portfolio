@@ -11,6 +11,9 @@ Uso:
 import sys
 import os
 import webbrowser
+import http.server
+import threading
+import socketserver
 import anthropic
 from dotenv import load_dotenv
 from rich.console import Console
@@ -32,7 +35,18 @@ from agent.mpt import (
     baixar_retornos, calcular_portfolios_otimos,
     formatar_mpt_para_prompt, exibir_mpt_terminal
 )
-from agent.dashboard import gerar_dashboard, adicionar_paineis_mpt, adicionar_painel_realocacao, adicionar_plano_realocacao_html
+from agent.dashboard import gerar_dashboard, adicionar_paineis_mpt, adicionar_painel_realocacao, adicionar_plano_realocacao_html, adicionar_painel_erc, adicionar_resumo_estrategias, adicionar_curva_recomendada
+
+def _garantir_template():
+    import shutil
+    from pathlib import Path
+    nome = "dashboard_20260416_2004.html"
+    if not Path(nome).exists():
+        for c in [Path("outputs") / nome] + list(Path(".").glob(f"**/{nome}")):
+            if c.exists() and c != Path(nome):
+                shutil.copy(c, nome)
+                return
+_garantir_template()
 from agent.accuracy import (
     avaliar_recomendacoes_pendentes,
     salvar_recomendacoes,
@@ -49,6 +63,114 @@ from agent.reporter import (
 
 load_dotenv()
 console = Console()
+
+
+
+
+def _md_to_html(texto: str) -> str:
+    """Converte markdown para HTML estilizado para o dashboard."""
+    if not texto:
+        return ""
+    if "<div" in texto or "<table" in texto[:200]:
+        return texto
+    import re
+    linhas = texto.split("\n")
+    out = []
+    em_lista = False
+    em_tabela = False
+    for linha in linhas:
+        s = linha.strip()
+        if not s:
+            if em_lista: out.append("</ul>"); em_lista = False
+            if em_tabela: out.append("</table>"); em_tabela = False
+            continue
+        if re.match(r"^-{3,}$", s):
+            if em_lista: out.append("</ul>"); em_lista = False
+            out.append('<hr style="border:none;border-top:1px solid #1e3a5f;margin:12px 0">')
+            continue
+        m = re.match(r"^(#{1,3}) (.+)$", s)
+        if m:
+            lvl = len(m.group(1))
+            txt = _mdi(m.group(2))
+            sz = ["1.05rem","0.95rem","0.85rem"][lvl-1]
+            out.append(f'<h{lvl+1} style="color:#7eb8f7;font-size:{sz};margin:16px 0 8px;border-bottom:1px solid #1e3a5f;padding-bottom:4px">{txt}</h{lvl+1}>')
+            continue
+        if s.startswith("|"):
+            if re.match(r"^[|\s\-:]+$", s): continue
+            if not em_tabela:
+                out.append('<table style="width:100%;border-collapse:collapse;font-size:0.78rem;margin:8px 0">')
+                em_tabela = True
+            cells = [_mdi(c.strip()) for c in s.strip("|").split("|")]
+            tds = "".join(f'<td style="padding:6px 10px;border-bottom:1px solid #0f1e30;color:#c0cfe0">{c}</td>' for c in cells)
+            out.append(f"<tr>{tds}</tr>")
+            continue
+        else:
+            if em_tabela: out.append("</table>"); em_tabela = False
+        if re.match(r"^[-*✅•] ", s):
+            if not em_lista: out.append('<ul style="list-style:none;padding:0;margin:4px 0">'); em_lista = True
+            out.append(f'<li style="padding:3px 0;color:#a0b0c0;font-size:0.78rem"><span style="color:#4a6a8a;margin-right:8px">•</span>{_mdi(s[2:])}</li>')
+            continue
+        m2 = re.match(r"^(\d+)\. (.+)$", s)
+        if m2:
+            if not em_lista: out.append('<ul style="list-style:none;padding:0;margin:4px 0">'); em_lista = True
+            out.append(f'<li style="padding:3px 0;color:#a0b0c0;font-size:0.78rem"><span style="color:#4a6a8a;margin-right:8px">{m2.group(1)}.</span>{_mdi(m2.group(2))}</li>')
+            continue
+        if em_lista: out.append("</ul>"); em_lista = False
+        out.append(f'<p style="color:#a0b0c0;font-size:0.8rem;margin:4px 0;line-height:1.5">{_mdi(s)}</p>')
+    if em_lista: out.append("</ul>")
+    if em_tabela: out.append("</table>")
+    return "\n".join(out)
+
+
+def _mdi(txt: str) -> str:
+    import re
+    txt = re.sub(r"\*\*(.+?)\*\*", r'<strong style="color:#e0e6f0">\1</strong>', txt)
+    txt = re.sub(r"\*(.+?)\*",       r'<em>\1</em>', txt)
+    txt = re.sub(r"`(.+?)`",           r'<code style="color:#7eb8f7">\1</code>', txt)
+    return txt
+
+
+def _abrir_dashboard_servidor(caminho_html: str, porta: int = 8765):
+    """
+    Serve o dashboard via HTTP local para que o Plotly CDN funcione.
+    Evita bloqueio de scripts ao abrir como file://.
+    """
+    import os
+    pasta  = os.path.dirname(os.path.abspath(caminho_html))
+    arquivo = os.path.basename(caminho_html)
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=pasta, **kwargs)
+        def log_message(self, format, *args):
+            pass  # silencia logs
+
+    # Tenta porta, se ocupada tenta próximas
+    httpd = None
+    porta_usada = porta
+    for p in range(porta, porta + 10):
+        try:
+            httpd = socketserver.TCPServer(("", p), Handler)
+            httpd.allow_reuse_address = True
+            porta_usada = p
+            break
+        except OSError:
+            continue
+    if httpd is None:
+        webbrowser.open(f"file:///{os.path.abspath(caminho_html)}")
+        return caminho_html
+    t = threading.Thread(target=httpd.serve_forever, daemon=False)
+    t.start()
+    url = f"http://localhost:{porta_usada}/{arquivo}"
+    webbrowser.open(url)
+    console.print(f"\n  🌐 [bold cyan]Dashboard:[/bold cyan] [link]{url}[/link]")
+    console.print("  [dim]Pressione Ctrl+C para encerrar...[/dim]\n")
+    try:
+        t.join()
+    except KeyboardInterrupt:
+        httpd.shutdown()
+        console.print("\n  [dim]Servidor encerrado.[/dim]")
+    return url
 
 
 def exibir_factor_scores(factor_scores: list):
@@ -176,8 +298,116 @@ def exibir_historico_ordens(ordens: list[dict]):
     console.print()
 
 
+def _garantir_secoes_completas(caminho_dash: str):
+    """
+    Verifica se o dashboard tem todas as seções e dados corretos.
+    Injeta do template base dia 16: ERC+Pizza+Geo+Delta+Screener e Monte Carlo com dados reais.
+    """
+    TEMPLATE_FILENAME = "dashboard_20260416_2004.html"
+    # Marcadores para detectar seções faltando
+    SECOES_CHECK = ['id="chart-erc-sharpe"', 'id="chart-atual-pizza"', 'var estrategias']
+    # Bloco completo ERC+Pizza+Geo+Delta+Screener no template
+    BLOCO_START  = '<div class="card" style="grid-column: 1 / -1;">\n    <div class="card-title">\U0001f4c8 Comparativo de Estratégias'
+    ANALISE_CARD = '<div class="card" style="grid-column: 1 / -1; margin-top: 8px;">'
+    # Monte Carlo
+    MC_START     = "// ── Monte Carlo + Fronteira Eficiente"
+    NEXT_SCRIPT  = "\n\n<script>"
+
+    try:
+        html = open(caminho_dash, encoding="utf-8").read()
+        falta_erc  = any(s not in html for s in SECOES_CHECK)
+        mc_zerado  = 'x: [0],' in html and MC_START in html
+
+        if not falta_erc and not mc_zerado:
+            return
+
+        # Localizar template base
+        from pathlib import Path
+        candidatos = [
+            Path(caminho_dash).parent / TEMPLATE_FILENAME,
+            Path.cwd() / TEMPLATE_FILENAME,
+            Path.cwd() / "outputs" / TEMPLATE_FILENAME,
+        ]
+        try:
+            candidatos += list(Path.cwd().glob(f"**/{TEMPLATE_FILENAME}"))
+        except Exception:
+            pass
+
+        template_path = next((c for c in candidatos if c.exists()), None)
+        if not template_path:
+            console.print("  [dim yellow]⚠️  Template base não encontrado.[/dim yellow]")
+            return
+
+        html16 = template_path.read_text(encoding="utf-8")
+        corrigiu = []
+
+        # 1. Injetar bloco ERC+Pizza+Geo+Delta+Screener
+        if falta_erc:
+            idx_s = html16.find(BLOCO_START)
+            idx_e = html16.find(ANALISE_CARD)
+            if idx_s > 0 and idx_e > idx_s:
+                bloco = html16[idx_s:idx_e]
+                # Inserir antes do card de análise ou antes de </body>
+                idx_ins = html.find(ANALISE_CARD)
+                if idx_ins == -1:
+                    idx_ins = html.rfind("</body>")
+                if idx_ins > 0:
+                    html = html[:idx_ins] + "\n" + bloco + "\n" + html[idx_ins:]
+                    corrigiu.append("ERC/Pizza/Geo")
+
+        # 2. Corrigir Monte Carlo zerado
+        if mc_zerado:
+            idx_mc16_s = html16.find(MC_START)
+            idx_mc16_e = html16.find(NEXT_SCRIPT, idx_mc16_s)
+            idx_mc_s   = html.find(MC_START)
+            idx_mc_e   = html.find(NEXT_SCRIPT, idx_mc_s)
+            if all(i > 0 for i in [idx_mc16_s, idx_mc16_e, idx_mc_s, idx_mc_e]):
+                html = html[:idx_mc_s] + html16[idx_mc16_s:idx_mc16_e] + html[idx_mc_e:]
+                corrigiu.append("Monte Carlo")
+
+        if corrigiu:
+            open(caminho_dash, "w", encoding="utf-8").write(html)
+            console.print(f"  [dim]📊 Corrigido: {', '.join(corrigiu)}.[/dim]")
+
+    except Exception as e:
+        console.print(f"  [dim yellow]⚠️  _garantir_secoes_completas: {e}[/dim yellow]")
+
+
+def _embutir_plotly(caminho_html: str):
+    """Substitui o CDN do Plotly por script inline, tornando o HTML autônomo."""
+    import urllib.request
+    PLOTLY_TAG = '<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>'
+    PLOTLY_URL = "https://cdn.plot.ly/plotly-2.27.0.min.js"
+    CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".plotly_cache.js")
+
+    try:
+        html = open(caminho_html, encoding="utf-8").read()
+        if PLOTLY_TAG not in html:
+            return  # já embutido ou tag diferente
+
+        # Tentar cache local primeiro
+        js = None
+        if os.path.exists(CACHE):
+            js = open(CACHE, encoding="utf-8").read()
+        else:
+            try:
+                with urllib.request.urlopen(PLOTLY_URL, timeout=15) as r:
+                    js = r.read().decode("utf-8")
+                open(CACHE, "w", encoding="utf-8").write(js)
+            except Exception:
+                return  # sem internet — mantém CDN, usa servidor HTTP
+
+        if js:
+            html = html.replace(PLOTLY_TAG, f"<script>\n{js}\n</script>", 1)
+            open(caminho_html, "w", encoding="utf-8").write(html)
+            console.print("  [dim]📦 Plotly embutido — dashboard funciona offline.[/dim]")
+    except Exception:
+        pass  # falha silenciosa — não bloqueia o fluxo
+
+
 def main():
     args = sys.argv[1:]
+    retornos_hist = None
     dry_run    = "--dry-run" in args
     no_backtest = "--no-backtest" in args
     csv_forcado = next((a for a in args if not a.startswith("--")), None)
@@ -302,8 +532,15 @@ def main():
                     caminho_dash, posicoes, ativos_dados,
                     oportunidades_screener, mpt_resultado
                 )
+            if mpt_resultado and mpt_resultado.get("erc"):
+                adicionar_painel_erc(caminho_dash, mpt_resultado)
+            adicionar_resumo_estrategias(caminho_dash, mpt_resultado)
+            try:
+                adicionar_curva_recomendada(caminho_dash, mpt_resultado, retornos_hist)
+            except Exception:
+                pass
             console.print(f"\n  ✅ [bold green]Dashboard:[/bold green] [cyan]{caminho_dash}[/cyan]")
-            webbrowser.open(f"file:///{os.path.abspath(caminho_dash)}")
+            url = _abrir_dashboard_servidor(caminho_dash)
         salvar_snapshot(posicoes, ativos_dados, capital_disponivel)
         broker_manager.desconectar()
         return
@@ -317,12 +554,23 @@ def main():
     # Adiciona contexto do screener ao resultado
     screener_texto = formatar_screener_para_prompt(oportunidades_screener)
 
+    # Adiciona contexto MPT/ERC/Deep Learning ao prompt do Claude
+    mpt_texto = ""
+    if mpt_resultado:
+        from agent.mpt import formatar_mpt_para_prompt
+        mpt_texto = formatar_mpt_para_prompt(mpt_resultado)
+        # Adiciona resultados de Deep Learning se disponíveis
+        if mpt_resultado.get("dls") or mpt_resultado.get("deepstatarb"):
+            from agent.deep_portfolios import formatar_deep_para_prompt
+            mpt_texto += formatar_deep_para_prompt(mpt_resultado)
+
     resultado = analisar_portfolio_com_claude(
         ativos_dados=ativos_dados,
         posicoes=posicoes,
         capital_disponivel=capital_disponivel,
         client=client,
         screener_texto=screener_texto,
+        mpt_texto=mpt_texto,
     )
 
     # ── 10. Output ────────────────────────────────────────────────
@@ -331,6 +579,7 @@ def main():
     # ── 11. Dashboard HTML ────────────────────────────────────────
     if bt_resultado:
         scores_final = resultado.get("factor_scores", factor_scores)
+        # Gerar dashboard base via agent/dashboard.py (gera Monte Carlo, ERC, etc.)
         caminho_dash = gerar_dashboard(
             bt_resultado, scores_final, posicoes, ativos_dados, capital_disponivel,
             oportunidades_screener=oportunidades_screener,
@@ -342,9 +591,21 @@ def main():
                 caminho_dash, posicoes, ativos_dados,
                 oportunidades_screener, mpt_resultado
             )
-        adicionar_plano_realocacao_html(caminho_dash, resultado["analise"])
+        if mpt_resultado and mpt_resultado.get("erc"):
+            adicionar_painel_erc(caminho_dash, mpt_resultado)
+            adicionar_resumo_estrategias(caminho_dash, mpt_resultado)
+        try:
+            adicionar_curva_recomendada(caminho_dash, mpt_resultado, retornos_hist)
+        except Exception:
+            pass
+        # Atualiza análise AI (converte markdown → HTML e injeta no card final)
+        analise_html = _md_to_html(resultado.get("analise", ""))
+        adicionar_plano_realocacao_html(caminho_dash, analise_html)
+        # Embutir Plotly inline para o HTML funcionar sem servidor
+        _garantir_secoes_completas(caminho_dash)
+        _embutir_plotly(caminho_dash)
         console.print(f"\n  ✅ [bold green]Dashboard gerado:[/bold green] [cyan]{caminho_dash}[/cyan]")
-        webbrowser.open(f"file:///{os.path.abspath(caminho_dash)}")
+        url = _abrir_dashboard_servidor(caminho_dash)
 
     # ── 12. Salva e exporta ───────────────────────────────────────
     n_salvas = salvar_recomendacoes(resultado["analise"], ativos_dados, posicoes)
