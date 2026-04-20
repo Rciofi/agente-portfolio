@@ -1,14 +1,6 @@
 """
-agent/mpt.py
-============
-Otimização de portfólio via Monte Carlo (10.000 simulações),
-Fronteira Eficiente, Máx. Sharpe, Mín. Variância, Risk Parity e ERC.
-
-Exporta:
-    baixar_retornos(tickers, periodo) -> pd.DataFrame
-    calcular_portfolios_otimos(retornos, pesos_atuais) -> dict
-    formatar_mpt_para_prompt(resultado) -> str
-    exibir_mpt_terminal(resultado) -> None
+agent/mpt.py — versão definitiva
+Estrutura de retorno compatível com agent/dashboard.py.
 """
 
 import warnings
@@ -19,58 +11,108 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+# ── Constantes ─────────────────────────────────────────────────────────────────
+N_SIMULACOES     = 10_000
+TAXA_LIVRE_RISCO = 0.045
+DIAS_UTEIS_ANO   = 252
+MAX_PESO_ATIVO   = 0.40
+MIN_PESO_ATIVO   = 0.0
+RETORNO_MERCADO_LONGO_PRAZO = 0.09
+RETORNO_ESPERADO_MIN = 0.02
+RETORNO_ESPERADO_MAX = 0.18
+ALPHA_ESPERADO_MAX = 0.03
 
+
+# ── Classe MonteCarloResult ────────────────────────────────────────────────────
+class MonteCarloResult:
+    """
+    Objeto retornado em mpt_resultado["monte_carlo"].
+    Atributos exigidos pelo dashboard.py:
+        .volatilidades   list[float]  valores em decimal (ex: 0.18 = 18%)
+        .retornos        list[float]  valores em decimal
+        .sharpes         list[float]
+        .idx_max_sharpe  int
+        .idx_min_vol     int
+        .vol_atual       float        decimal
+        .retorno_atual   float        decimal
+        .sharpe_atual    float
+    """
+    def __init__(self, vols, rets, sharpes, vol_at, ret_at, sh_at):
+        self.volatilidades  = vols
+        self.retornos       = rets
+        self.sharpes        = sharpes
+        self.idx_max_sharpe = int(np.argmax(sharpes))
+        self.idx_min_vol    = int(np.argmin(vols))
+        self.vol_atual      = vol_at
+        self.retorno_atual  = ret_at
+        self.sharpe_atual   = sh_at
+
+    # Para compatibilidade com código que usa mc["vols"] etc.
+    def get(self, key, default=None):
+        mapping = {
+            "vols":    self.volatilidades,
+            "rets":    self.retornos,
+            "sharpes": self.sharpes,
+            "volatilidades": self.volatilidades,
+            "retornos":      self.retornos,
+        }
+        return mapping.get(key, default)
+
+    def __getitem__(self, key):
+        v = self.get(key)
+        return v if v is not None else {}
+
+    def __bool__(self):
+        return bool(self.volatilidades)
+
+
+# ── Classe PortfolioResult ─────────────────────────────────────────────────────
 class PortfolioResult:
     """
-    Wrapper compatível com deep_portfolios.py (atributos) e dashboard (dict).
-
-    Atributos expostos (esperados pelo deep_portfolios.py):
-        p.retorno       float  (= ret em decimal, ex: 0.319)
-        p.volatilidade  float  (= vol em decimal, ex: 0.214)
-        p.sharpe        float
-        p.tickers       list[str]
-        p.pesos         list[float]   (mesma ordem que tickers)
-        p.delta_pesos   list[float]   (pesos - pesos_atuais; calculado depois se necessário)
-
-    Também funciona como dict:
-        p.get("ret"), p["sharpe"], "pesos" in p
+    Wrapper para portfólios ótimos.
+    Atributos exigidos pelo dashboard.py:
+        .pesos          list[float]   pesos do portfólio ótimo (decimal)
+        .pesos_atuais   list[float]   pesos do portfólio atual (mesma ordem)
+        .retorno        float         decimal
+        .volatilidade   float         decimal
+        .sharpe         float
+        .tickers        list[str]
+        .delta_pesos    list[float]
     """
     def __init__(self, d: dict, pesos_atuais_dict: dict = None):
         self._d = d or {}
         pesos_dict = d.get("pesos", {}) if d else {}
 
-        # Escalar primitivos
         self.retorno      = float(d.get("ret",    0)) if d else 0.0
         self.volatilidade = float(d.get("vol",    0)) if d else 0.0
         self.sharpe       = float(d.get("sharpe", 0)) if d else 0.0
         self.ret = self.retorno
         self.vol = self.volatilidade
 
-        # Listas ordenadas (deep_portfolios.py usa zip(p.tickers, p.pesos, p.delta_pesos))
-        if isinstance(pesos_dict, dict):
-            self.tickers = list(pesos_dict.keys())
-            self.pesos   = list(pesos_dict.values())
+        if isinstance(pesos_dict, dict) and pesos_dict:
+            self.tickers   = list(pesos_dict.keys())
+            self.pesos     = list(pesos_dict.values())       # decimal
+            self.pesos_dict = pesos_dict
         else:
-            self.tickers = []
-            self.pesos   = []
+            self.tickers   = []
+            self.pesos     = []
+            self.pesos_dict = {}
 
-        # delta_pesos: diferença vs pesos atuais (0 se não fornecido)
+        # pesos_atuais na mesma ordem que tickers (exigido pelo dashboard.py)
         if pesos_atuais_dict and self.tickers:
-            self.delta_pesos = [
-                float(pesos_dict.get(t, 0)) - float(pesos_atuais_dict.get(t, 0))
-                for t in self.tickers
-            ]
+            self.pesos_atuais = [float(pesos_atuais_dict.get(t, 0)) for t in self.tickers]
         else:
-            self.delta_pesos = [0.0] * len(self.tickers)
+            self.pesos_atuais = [0.0] * len(self.tickers)
 
-        # Manter pesos também como dict para compatibilidade
-        self.pesos_dict = pesos_dict
+        self.delta_pesos = [
+            p - pa for p, pa in zip(self.pesos, self.pesos_atuais)
+        ]
 
     def get(self, key, default=None):
         return self._d.get(key, default)
 
     def __getitem__(self, key):
-        return self._d[key]
+        return self._d.get(key)
 
     def __contains__(self, key):
         return key in self._d
@@ -82,670 +124,455 @@ class PortfolioResult:
         return f"PortfolioResult(ret={self.retorno:.3f}, vol={self.volatilidade:.3f}, sharpe={self.sharpe:.3f})"
 
 
+# ── ResultadoMPT — nunca levanta KeyError ──────────────────────────────────────
+class ResultadoMPT(dict):
+    """Dict que retorna None para qualquer chave desconhecida."""
+    def __missing__(self, key):
+        return None
 
-# ── Constantes ────────────────────────────────────────────────────────────────
-N_SIMULACOES   = 10_000
-TAXA_LIVRE_RISCO = 0.045   # 4.5% aa (Fed Funds Rate aproximado)
-DIAS_UTEIS_ANO   = 252
-MAX_PESO_ATIVO   = 0.40    # limite máximo por ativo
-MIN_PESO_ATIVO   = 0.0
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            return None
 
 
-# ── 1. Download de retornos históricos ────────────────────────────────────────
-
+# ── Download de retornos ───────────────────────────────────────────────────────
 def baixar_retornos(tickers: List[str], periodo: str = "3y") -> pd.DataFrame:
-    """
-    Baixa retornos diários via yfinance.
-    Retorna DataFrame de retornos percentuais (não acumulados).
-    """
     try:
         import yfinance as yf
-
-        periodo_map = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
-        dias = periodo_map.get(periodo, 1095)
+        dias_map = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
+        dias  = dias_map.get(periodo, 1095)
         end   = datetime.now()
         start = end - timedelta(days=dias)
-
-        raw = yf.download(
-            tickers, start=start, end=end,
-            auto_adjust=True, progress=False, threads=True
-        )
-
+        raw   = yf.download(tickers, start=start, end=end,
+                            auto_adjust=True, progress=False, threads=True)
         if raw.empty:
             return pd.DataFrame()
-
-        # Extrair preços de fechamento
         if isinstance(raw.columns, pd.MultiIndex):
-            precos = raw["Close"] if "Close" in raw.columns.get_level_values(0) else raw.iloc[:, :len(tickers)]
+            precos = raw["Close"]
         else:
-            precos = raw[["Close"]] if "Close" in raw.columns else raw
-
-        # Garantir só os tickers pedidos
+            precos = raw
         cols_ok = [t for t in tickers if t in precos.columns]
         if not cols_ok:
             return pd.DataFrame()
-
-        precos = precos[cols_ok].dropna(how="all")
-        retornos = precos.pct_change().dropna()
-        return retornos
-
+        return precos[cols_ok].dropna(how="all").pct_change().dropna()
     except Exception as e:
         print(f"  ⚠️  baixar_retornos: {e}")
         return pd.DataFrame()
 
 
-# ── 2. Funções auxiliares de portfólio ───────────────────────────────────────
+# ── Funções de portfólio ───────────────────────────────────────────────────────
+def _stats(w, mu, cov):
+    r  = float(np.dot(w, mu) * DIAS_UTEIS_ANO)
+    v  = float(np.sqrt(np.dot(w, np.dot(cov * DIAS_UTEIS_ANO, w))))
+    sh = (r - TAXA_LIVRE_RISCO) / v if v > 1e-8 else 0.0
+    return r, v, sh
 
-def _stats_portfolio(pesos: np.ndarray, ret_media: np.ndarray,
-                     cov: np.ndarray) -> tuple:
-    """Retorna (retorno_anual, volatilidade_anual, sharpe)."""
-    ret = float(np.dot(pesos, ret_media) * DIAS_UTEIS_ANO)
-    vol = float(np.sqrt(np.dot(pesos, np.dot(cov * DIAS_UTEIS_ANO, pesos))))
-    sharpe = (ret - TAXA_LIVRE_RISCO) / vol if vol > 1e-8 else 0.0
-    return ret, vol, sharpe
+def _norm(w):
+    s = w.sum()
+    return w / s if s > 1e-9 else np.ones(len(w)) / len(w)
 
-
-def _normalizar(pesos: np.ndarray) -> np.ndarray:
-    s = pesos.sum()
-    return pesos / s if s > 1e-9 else np.ones(len(pesos)) / len(pesos)
-
-
-def _dirichlet(rng: np.random.Generator, n: int,
-               alpha: float = 1.0) -> np.ndarray:
-    """Amostra Dirichlet — gera pesos que somam 1."""
+def _dirichlet(rng, n, alpha=1.0):
     return rng.dirichlet(np.full(n, alpha))
 
+def _retorno_geometrico_anual(retornos: pd.Series) -> float:
+    retornos = pd.to_numeric(retornos, errors="coerce").dropna()
+    if len(retornos) < 2:
+        return RETORNO_MERCADO_LONGO_PRAZO
+    total = float((1.0 + retornos).prod() - 1.0)
+    anos = len(retornos) / DIAS_UTEIS_ANO
+    if anos <= 0 or total <= -0.99:
+        return RETORNO_MERCADO_LONGO_PRAZO
+    return float((1.0 + total) ** (1.0 / anos) - 1.0)
 
-# ── 3. Monte Carlo principal ──────────────────────────────────────────────────
-
-def _monte_carlo(ret_media: np.ndarray, cov: np.ndarray,
-                 n: int = N_SIMULACOES) -> dict:
+def _estimativa_retornos_conservadora(retornos: pd.DataFrame, tickers: list[str]) -> tuple[np.ndarray, dict]:
     """
-    Simula n portfólios aleatórios via Dirichlet.
-    Retorna dict com arrays vols, rets, sharpes e pesos do melhor Sharpe.
-    """
-    rng = np.random.default_rng(seed=42)
-    num_ativos = len(ret_media)
+    Estima retornos esperados sem extrapolar vencedores recentes.
 
+    O retorno esperado fica ancorado em uma premissa de mercado de longo prazo
+    e recebe apenas uma parcela pequena do alpha historico recente. Isso evita
+    que Max Sharpe/DLS virem uma aposta mecanica nos ativos que mais subiram.
+    """
+    candidatos_benchmark = [t for t in ["IVV", "SPY", "VOO", "VT", "ACWI"] if t in retornos.columns]
+    if candidatos_benchmark:
+        bench_col = candidatos_benchmark[0]
+        benchmark_realizado = _retorno_geometrico_anual(retornos[bench_col])
+    else:
+        bench_col = "Equal Weight"
+        benchmark_realizado = _retorno_geometrico_anual(retornos[tickers].mean(axis=1))
+
+    benchmark_realizado = float(np.clip(benchmark_realizado, -0.05, 0.22))
+    anchor = 0.80 * RETORNO_MERCADO_LONGO_PRAZO + 0.20 * benchmark_realizado
+
+    mu_anuais = []
+    hist_anuais = {}
+    for ticker in tickers:
+        hist = _retorno_geometrico_anual(retornos[ticker])
+        hist_anuais[ticker] = hist
+        alpha_hist = float(np.clip(hist - benchmark_realizado, -0.20, 0.20))
+        alpha_esperado = float(np.clip(0.15 * alpha_hist, -ALPHA_ESPERADO_MAX, ALPHA_ESPERADO_MAX))
+        esperado = float(np.clip(anchor + alpha_esperado, RETORNO_ESPERADO_MIN, RETORNO_ESPERADO_MAX))
+        mu_anuais.append(esperado)
+
+    meta = {
+        "metodo": "conservador_anchor_mercado_alpha_limitado",
+        "benchmark": bench_col,
+        "benchmark_realizado": benchmark_realizado,
+        "anchor": anchor,
+        "retornos_historicos_anuais": hist_anuais,
+        "retornos_esperados_anuais": dict(zip(tickers, mu_anuais)),
+        "retorno_mercado_longo_prazo": RETORNO_MERCADO_LONGO_PRAZO,
+        "retorno_esperado_min": RETORNO_ESPERADO_MIN,
+        "retorno_esperado_max": RETORNO_ESPERADO_MAX,
+        "alpha_esperado_max": ALPHA_ESPERADO_MAX,
+    }
+    return np.array(mu_anuais, dtype=float) / DIAS_UTEIS_ANO, meta
+
+
+# ── Monte Carlo ────────────────────────────────────────────────────────────────
+def _monte_carlo(mu, cov, n=N_SIMULACOES, seed=42):
+    rng = np.random.default_rng(seed=seed)
+    k   = len(mu)
     vols, rets, sharpes = [], [], []
-    best_sh = -np.inf
-    best_w  = None
-
     for _ in range(n):
-        w = _dirichlet(rng, num_ativos)
-        r, v, sh = _stats_portfolio(w, ret_media, cov)
-        vols.append(round(v * 100, 2))
-        rets.append(round(r * 100, 2))
-        sharpes.append(round(sh, 4))
-        if sh > best_sh:
-            best_sh = sh
-            best_w  = w.copy()
-
-    return {
-        "vols":    vols,
-        "rets":    rets,
-        "sharpes": sharpes,
-        "best_w":  best_w,
-        "best_sh": best_sh,
-    }
+        w = _dirichlet(rng, k)
+        r, v, s = _stats(w, mu, cov)
+        vols.append(v)
+        rets.append(r)
+        sharpes.append(round(s, 4))
+    return vols, rets, sharpes
 
 
-# ── 4. Fronteira Eficiente ────────────────────────────────────────────────────
+# ── Fronteira eficiente analítica ──────────────────────────────────────────────
+def _fronteira_analitica(mu, cov, n_pts=50):
+    from scipy.optimize import minimize
+    k      = len(mu)
+    w0     = np.ones(k) / k
+    bounds = [(0.0, 1.0)] * k
+    eq_sum = {"type": "eq", "fun": lambda w: w.sum() - 1}
 
-def _fronteira_eficiente(vols: list, rets: list, n_bins: int = 60) -> dict:
-    """
-    Extrai a fronteira eficiente agrupando por bins de volatilidade
-    e pegando o maior retorno em cada bin.
-    """
-    if not vols:
-        return {"vols": [], "rets": []}
+    res_mv = minimize(lambda w: np.dot(w, np.dot(cov, w)), w0,
+                      method="SLSQP", bounds=bounds, constraints=[eq_sum],
+                      options={"maxiter": 500, "ftol": 1e-12})
+    r_min = float(np.dot(res_mv.x, mu) * DIAS_UTEIS_ANO)
 
-    vol_min, vol_max = min(vols), max(vols)
-    step = (vol_max - vol_min) / n_bins if vol_max > vol_min else 1.0
+    res_mr = minimize(lambda w: -float(np.dot(w, mu) * DIAS_UTEIS_ANO), w0,
+                      method="SLSQP", bounds=bounds, constraints=[eq_sum],
+                      options={"maxiter": 500, "ftol": 1e-12})
+    r_max = float(np.dot(res_mr.x, mu) * DIAS_UTEIS_ANO)
 
-    bins: dict = {}
-    for v, r in zip(vols, rets):
-        k = round((v - vol_min) / step)
-        if k not in bins or r > bins[k][1]:
-            bins[k] = (v, r)
-
-    pts = sorted(bins.values(), key=lambda x: x[0])
-    return {
-        "vols": [round(p[0], 2) for p in pts],
-        "rets": [round(p[1], 2) for p in pts],
-    }
-
-
-# ── 5. Mínima Variância (scipy) ───────────────────────────────────────────────
-
-def _min_variancia(ret_media: np.ndarray, cov: np.ndarray,
-                   tickers: List[str]) -> dict:
-    try:
-        from scipy.optimize import minimize
-
-        n = len(ret_media)
-        w0 = np.ones(n) / n
-        bounds = [(MIN_PESO_ATIVO, MAX_PESO_ATIVO)] * n
-        constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
-
-        res = minimize(
-            lambda w: float(np.dot(w, np.dot(cov * DIAS_UTEIS_ANO, w))),
-            w0, method="SLSQP", bounds=bounds, constraints=constraints,
-            options={"maxiter": 500, "ftol": 1e-10}
-        )
-
+    ef_v, ef_r = [], []
+    for target in np.linspace(r_min, r_max * 0.98, n_pts):
+        cons = [eq_sum, {"type": "eq",
+                         "fun": lambda w, t=target: float(np.dot(w, mu)*DIAS_UTEIS_ANO) - t}]
+        res = minimize(lambda w: np.dot(w, np.dot(cov, w)), w0,
+                       method="SLSQP", bounds=bounds, constraints=cons,
+                       options={"maxiter": 500, "ftol": 1e-12})
         if res.success:
-            w = _normalizar(np.maximum(res.x, 0))
-            r, v, sh = _stats_portfolio(w, ret_media, cov)
-            return {
-                "pesos":  dict(zip(tickers, [round(float(x), 6) for x in w])),
-                "ret":    round(r, 6),
-                "vol":    round(v, 6),
-                "sharpe": round(sh, 6),
-            }
-    except Exception:
-        pass
+            v = float(np.sqrt(np.dot(res.x, np.dot(cov * DIAS_UTEIS_ANO, res.x))))
+            r = float(np.dot(res.x, mu) * DIAS_UTEIS_ANO)
+            ef_v.append(v)
+            ef_r.append(r)
+    return ef_v, ef_r
+
+
+# ── Otimizações ────────────────────────────────────────────────────────────────
+def _otimizar(mu, cov, tickers, objective, extra_cons=None):
+    from scipy.optimize import minimize
+    k      = len(mu)
+    w0     = np.ones(k) / k
+    bounds = [(MIN_PESO_ATIVO, MAX_PESO_ATIVO)] * k
+    cons   = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
+    if extra_cons:
+        cons += extra_cons
+    res = minimize(objective, w0, method="SLSQP", bounds=bounds, constraints=cons,
+                   options={"maxiter": 500, "ftol": 1e-10})
+    if res.success:
+        w = _norm(np.maximum(res.x, 0))
+        r, v, sh = _stats(w, mu, cov)
+        return {"pesos": dict(zip(tickers, w.tolist())), "ret": r, "vol": v, "sharpe": sh}
     return {}
 
+def _max_sharpe(mu, cov, tickers):
+    return _otimizar(mu, cov, tickers,
+                     lambda w: -(_stats(w, mu, cov)[0] - TAXA_LIVRE_RISCO) / max(_stats(w, mu, cov)[1], 1e-8))
 
-# ── 6. Máximo Sharpe (scipy) ──────────────────────────────────────────────────
+def _min_var(mu, cov, tickers):
+    return _otimizar(mu, cov, tickers,
+                     lambda w: np.dot(w, np.dot(cov, w)))
 
-def _max_sharpe(ret_media: np.ndarray, cov: np.ndarray,
-                tickers: List[str]) -> dict:
-    try:
-        from scipy.optimize import minimize
+def _risk_parity(mu, cov, tickers):
+    def obj(w):
+        vol = np.sqrt(np.dot(w, np.dot(cov, w)))
+        rc  = w * np.dot(cov, w) / (vol + 1e-12)
+        return float(np.sum((rc - vol / len(w)) ** 2))
+    return _otimizar(mu, cov, tickers, obj)
 
-        n = len(ret_media)
-        w0 = np.ones(n) / n
-        bounds = [(MIN_PESO_ATIVO, MAX_PESO_ATIVO)] * n
-        constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1}]
+def _erc(mu, cov, tickers):
+    def obj(w):
+        vol = np.sqrt(np.dot(w, np.dot(cov * DIAS_UTEIS_ANO, w))) + 1e-12
+        rc  = w * np.dot(cov * DIAS_UTEIS_ANO, w) / vol
+        return float(np.sum((rc - vol / len(w)) ** 2)) + 1e-4 * np.sum(w**2)
+    return _otimizar(mu, cov, tickers, obj)
 
-        def neg_sharpe(w):
-            r, v, _ = _stats_portfolio(w, ret_media, cov)
-            return -((r - TAXA_LIVRE_RISCO) / v) if v > 1e-8 else 0.0
+def _dls(mu, cov, tickers):
+    lam = 0.02
+    def obj(w):
+        r, v, _ = _stats(w, mu, cov)
+        return -((r - TAXA_LIVRE_RISCO) / max(v, 1e-8)) - lam * np.sum(w * np.log(w + 1e-10))
+    return _otimizar(mu, cov, tickers, obj)
 
-        res = minimize(
-            neg_sharpe, w0, method="SLSQP", bounds=bounds,
-            constraints=constraints, options={"maxiter": 500, "ftol": 1e-10}
-        )
-
-        if res.success:
-            w = _normalizar(np.maximum(res.x, 0))
-            r, v, sh = _stats_portfolio(w, ret_media, cov)
-            return {
-                "pesos":  dict(zip(tickers, [round(float(x), 6) for x in w])),
-                "ret":    round(r, 6),
-                "vol":    round(v, 6),
-                "sharpe": round(sh, 6),
-            }
-    except Exception:
-        pass
+def _deepstatarb(mu, cov, tickers):
+    def obj(w):
+        r, v, _ = _stats(w, mu, cov)
+        return -r + (0.5/2) * v**2 + 0.01 * np.sum(w * np.log(w + 1e-10))
+    bounds_dsa = [(0.0, 0.20)] * len(tickers)
+    from scipy.optimize import minimize
+    k  = len(mu)
+    w0 = np.ones(k) / k
+    res = minimize(obj, w0, method="SLSQP", bounds=bounds_dsa,
+                   constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1}],
+                   options={"maxiter": 500, "ftol": 1e-10})
+    if res.success:
+        w = _norm(np.maximum(res.x, 0))
+        r, v, sh = _stats(w, mu, cov)
+        return {"pesos": dict(zip(tickers, w.tolist())), "ret": r, "vol": v, "sharpe": sh}
     return {}
 
-
-# ── 7. Risk Parity ────────────────────────────────────────────────────────────
-
-def _risk_parity(cov: np.ndarray, tickers: List[str]) -> dict:
+def _oos(retornos, pesos_ms_dict):
     try:
-        from scipy.optimize import minimize
-
-        n = len(tickers)
-        w0 = np.ones(n) / n
-        bounds = [(0.001, MAX_PESO_ATIVO)] * n
-
-        def rp_obj(w):
-            vol = np.sqrt(np.dot(w, np.dot(cov, w)))
-            rc  = w * np.dot(cov, w) / (vol + 1e-12)
-            target = vol / n
-            return float(np.sum((rc - target) ** 2))
-
-        res = minimize(
-            rp_obj, w0, method="SLSQP", bounds=bounds,
-            constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1}],
-            options={"maxiter": 1000, "ftol": 1e-12}
-        )
-
-        if res.success or res.fun < 1e-6:
-            w = _normalizar(np.maximum(res.x, 0))
-            ret_media_dummy = np.zeros(n)
-            r, v, sh = _stats_portfolio(w, ret_media_dummy, cov)
-            return {
-                "pesos":  dict(zip(tickers, [round(float(x), 6) for x in w])),
-                "ret":    round(r, 6),
-                "vol":    round(v, 6),
-                "sharpe": round(sh, 6),
-            }
-    except Exception:
-        pass
-    return {}
-
-
-# ── 8. ERC (Equal Risk Contribution) ─────────────────────────────────────────
-
-def _erc(cov: np.ndarray, tickers: List[str]) -> dict:
-    """Variação do Risk Parity com regularização L2."""
-    try:
-        from scipy.optimize import minimize
-
-        n = len(tickers)
-        w0 = np.ones(n) / n
-        bounds = [(0.001, MAX_PESO_ATIVO)] * n
-
-        def erc_obj(w):
-            cov_ann = cov * DIAS_UTEIS_ANO
-            vol = np.sqrt(np.dot(w, np.dot(cov_ann, w))) + 1e-12
-            rc  = w * np.dot(cov_ann, w) / vol
-            target = vol / n
-            return float(np.sum((rc - target) ** 2)) + 1e-4 * np.sum(w ** 2)
-
-        res = minimize(
-            erc_obj, w0, method="SLSQP", bounds=bounds,
-            constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1}],
-            options={"maxiter": 1000, "ftol": 1e-12}
-        )
-
-        if res.success or res.fun < 1e-5:
-            w = _normalizar(np.maximum(res.x, 0))
-            r, v, sh = _stats_portfolio(w, np.zeros(n), cov)
-            return {
-                "pesos":  dict(zip(tickers, [round(float(x), 6) for x in w])),
-                "ret":    round(r * DIAS_UTEIS_ANO, 6),
-                "vol":    round(v, 6),
-                "sharpe": round(sh, 6),
-            }
-    except Exception:
-        pass
-    return {}
-
-
-# ── 9. DLS (LSTM simulado) e DeepStatArb ─────────────────────────────────────
-
-def _dls_portfolio(ret_media: np.ndarray, cov: np.ndarray,
-                   tickers: List[str]) -> dict:
-    """
-    Simula portfólio DLS (Deep Learning Sharpe).
-    Usa variação do máx. Sharpe com regularização entrópica.
-    """
-    try:
-        from scipy.optimize import minimize
-
-        n = len(ret_media)
-        w0 = np.ones(n) / n
-        bounds = [(0.01, MAX_PESO_ATIVO)] * n
-        lam = 0.02   # regularização entrópica
-
-        def dls_obj(w):
-            r, v, _ = _stats_portfolio(w, ret_media, cov)
-            entropy = -lam * np.sum(w * np.log(w + 1e-10))
-            return -((r - TAXA_LIVRE_RISCO) / (v + 1e-8)) - entropy
-
-        res = minimize(
-            dls_obj, w0, method="SLSQP", bounds=bounds,
-            constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1}],
-            options={"maxiter": 500, "ftol": 1e-10}
-        )
-
-        if res.success:
-            w = _normalizar(np.maximum(res.x, 0))
-            r, v, sh = _stats_portfolio(w, ret_media, cov)
-            return {
-                "pesos":  dict(zip(tickers, [round(float(x), 6) for x in w])),
-                "ret":    round(r, 6),
-                "vol":    round(v, 6),
-                "sharpe": round(sh, 6),
-            }
-    except Exception:
-        pass
-    return {}
-
-
-def _deepstatarb(ret_media: np.ndarray, cov: np.ndarray,
-                 tickers: List[str]) -> dict:
-    """
-    Simula portfólio DeepStatArb (CNN-Transformer).
-    Usa otimização com penalidade de concentração.
-    """
-    try:
-        from scipy.optimize import minimize
-
-        n = len(ret_media)
-        w0 = np.ones(n) / n
-        bounds = [(0.0, 0.20)] * n   # max 20% por ativo (paper Henri)
-        lam_risk = 0.5
-        lam_ent  = 0.01
-
-        def dsa_obj(w):
-            r, v, _ = _stats_portfolio(w, ret_media, cov)
-            entropy = lam_ent * np.sum(w * np.log(w + 1e-10))
-            return -r + (lam_risk / 2) * v**2 + entropy
-
-        res = minimize(
-            dsa_obj, w0, method="SLSQP", bounds=bounds,
-            constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1}],
-            options={"maxiter": 500, "ftol": 1e-10}
-        )
-
-        if res.success:
-            w = _normalizar(np.maximum(res.x, 0))
-            r, v, sh = _stats_portfolio(w, ret_media, cov)
-            return {
-                "pesos":  dict(zip(tickers, [round(float(x), 6) for x in w])),
-                "ret":    round(r, 6),
-                "vol":    round(v, 6),
-                "sharpe": round(sh, 6),
-            }
-    except Exception:
-        pass
-    return {}
-
-
-# ── 10. Out-of-Sample (walk-forward) ─────────────────────────────────────────
-
-def _oos_validation(retornos: pd.DataFrame, pesos_ms: dict) -> dict:
-    """Valida o portfólio max Sharpe numa janela OOS de 20% dos dados."""
-    try:
-        n = len(retornos)
+        n     = len(retornos)
         split = int(n * 0.8)
-        oos = retornos.iloc[split:]
-        tickers = list(pesos_ms.keys())
-        cols_ok = [t for t in tickers if t in oos.columns]
-        if not cols_ok or oos.empty:
+        oos   = retornos.iloc[split:]
+        tks   = [t for t in pesos_ms_dict if t in oos.columns]
+        if not tks or oos.empty:
             return {}
-
-        w = np.array([pesos_ms.get(t, 0) for t in cols_ok])
-        w = w / w.sum() if w.sum() > 1e-8 else np.ones(len(w)) / len(w)
-
-        rets_oos = oos[cols_ok].dropna()
-        if rets_oos.empty:
-            return {}
-
-        port_rets = rets_oos.values @ w
-        ret_anual = float(port_rets.mean() * DIAS_UTEIS_ANO * 100)
-        vol_anual = float(port_rets.std() * np.sqrt(DIAS_UTEIS_ANO) * 100)
-        sharpe_oos = (ret_anual/100 - TAXA_LIVRE_RISCO) / (vol_anual/100) if vol_anual > 1e-6 else 0
-
-        # In-sample
-        ins = retornos.iloc[:split]
-        rets_ins = ins[cols_ok].dropna()
-        port_ins = rets_ins.values @ w
-        sh_in = (port_ins.mean() * DIAS_UTEIS_ANO - TAXA_LIVRE_RISCO) / (port_ins.std() * np.sqrt(DIAS_UTEIS_ANO) + 1e-8)
-
-        return {
-            "sharpe_in":  round(float(sh_in), 3),
-            "sharpe_out": round(float(sharpe_oos), 3),
-            "retorno_pct": round(ret_anual, 2),
-            "vol_pct":     round(vol_anual, 2),
-        }
+        w = np.array([pesos_ms_dict.get(t, 0) for t in tks], dtype=float)
+        w /= w.sum() if w.sum() > 0 else 1
+        pr  = oos[tks].dropna().values @ w
+        ins = retornos.iloc[:split][tks].dropna().values @ w
+        r_oos = float(pr.mean() * DIAS_UTEIS_ANO * 100)
+        v_oos = float(pr.std()  * np.sqrt(DIAS_UTEIS_ANO) * 100)
+        sh_in  = float((ins.mean() * DIAS_UTEIS_ANO - TAXA_LIVRE_RISCO) / (ins.std() * np.sqrt(DIAS_UTEIS_ANO) + 1e-8))
+        sh_out = (r_oos/100 - TAXA_LIVRE_RISCO) / (v_oos/100) if v_oos > 0 else 0
+        return {"sharpe_in": round(sh_in, 3), "sharpe_out": round(sh_out, 3),
+                "retorno_pct": round(r_oos, 2), "vol_pct": round(v_oos, 2)}
     except Exception:
         return {}
 
 
-# ── 11. Função principal ──────────────────────────────────────────────────────
+# ── Função principal ───────────────────────────────────────────────────────────
+def calcular_portfolios_otimos(retornos: pd.DataFrame,
+                                pesos_atuais,
+                                n_simulacoes: int = N_SIMULACOES) -> "ResultadoMPT":
+    # Garantir que pesos_atuais é dict
+    if isinstance(pesos_atuais, list):
+        if pesos_atuais and isinstance(pesos_atuais[0], dict):
+            pesos_atuais = {item.get("ticker", f"a{i}"): item.get("peso", 1/len(pesos_atuais))
+                            for i, item in enumerate(pesos_atuais)}
+        else:
+            pesos_atuais = {t: 1/len(pesos_atuais) for t in pesos_atuais}
+    elif not isinstance(pesos_atuais, dict):
+        return ResultadoMPT()
 
-def calcular_portfolios_otimos(
-    retornos: pd.DataFrame,
-    pesos_atuais: dict,
-    n_simulacoes: int = N_SIMULACOES,
-) -> dict:
-    """
-    Calcula portfólios ótimos e Monte Carlo.
-
-    Args:
-        retornos: DataFrame de retornos diários (yfinance)
-        pesos_atuais: dict {ticker: peso_atual}
-        n_simulacoes: número de simulações Monte Carlo (default 10.000)
-
-    Returns:
-        dict com todas as métricas para o dashboard
-    """
-    tickers = [t for t in pesos_atuais.keys() if t in retornos.columns]
+    tickers = [t for t in pesos_atuais if t in retornos.columns]
     if not tickers:
-        return {}
+        return ResultadoMPT()
 
     ret_df = retornos[tickers].dropna()
     if len(ret_df) < 60:
-        return {}
+        return ResultadoMPT()
 
-    # Shrinkage Ledoit-Wolf na covariância
+    # Covariância Ledoit-Wolf
     try:
         from sklearn.covariance import LedoitWolf
-        lw = LedoitWolf().fit(ret_df.values)
-        cov = lw.covariance_
+        cov = LedoitWolf().fit(ret_df.values).covariance_
     except Exception:
         cov = ret_df.cov().values
 
-    ret_media = ret_df.mean().values
-    n = len(tickers)
+    mu, estimativa_meta = _estimativa_retornos_conservadora(ret_df, tickers)
+    n  = len(tickers)
+
+    # Portfólio atual
+    w_at  = np.array([pesos_atuais.get(t, 0) for t in tickers], dtype=float)
+    w_at  = _norm(w_at)
+    r_at, v_at, sh_at = _stats(w_at, mu, cov)
+    pa_dict = dict(zip(tickers, w_at.tolist()))
 
     print(f"  📊 Monte Carlo: {n_simulacoes:,} portfólios × {n} ativos...", end=" ", flush=True)
-
-    # ── Monte Carlo ───────────────────────────────────────────────────────────
-    mc = _monte_carlo(ret_media, cov, n=n_simulacoes)
+    mc_vols, mc_rets, mc_sharpes = _monte_carlo(mu, cov, n=n_simulacoes)
     print("✅")
 
-    # ── Fronteira Eficiente ───────────────────────────────────────────────────
-    ef = _fronteira_eficiente(mc["vols"], mc["rets"])
+    print("  📐 Fronteira Eficiente analítica...", end=" ", flush=True)
+    ef_v, ef_r = _fronteira_analitica(mu, cov, n_pts=50)
+    print(f"✅ {len(ef_v)} pts")
 
-    # ── Portfólios otimizados ─────────────────────────────────────────────────
-    print("  ⚙️  Otimizando Max Sharpe...", end=" ", flush=True)
-    ms = _max_sharpe(ret_media, cov, tickers)
-    print("✅")
+    print("  ⚙️  Max Sharpe...",    end=" ", flush=True); ms  = _max_sharpe(mu, cov, tickers);   print("✅")
+    print("  ⚙️  Min Variância...", end=" ", flush=True); mv  = _min_var(mu, cov, tickers);      print("✅")
+    print("  ⚙️  Risk Parity...",   end=" ", flush=True); rp  = _risk_parity(mu, cov, tickers);  print("✅")
+    print("  ⚙️  ERC...",           end=" ", flush=True); erc = _erc(mu, cov, tickers);          print("✅")
+    print("  ⚙️  DLS (LSTM)...",    end=" ", flush=True); dls = _dls(mu, cov, tickers);          print("✅")
+    print("  ⚙️  DeepStatArb...",   end=" ", flush=True); dsa = _deepstatarb(mu, cov, tickers);  print("✅")
 
-    print("  ⚙️  Otimizando Min Variância...", end=" ", flush=True)
-    mv = _min_variancia(ret_media, cov, tickers)
-    print("✅")
-
-    print("  ⚙️  Calculando Risk Parity...", end=" ", flush=True)
-    rp = _risk_parity(cov, tickers)
-    print("✅")
-
-    print("  ⚙️  Calculando ERC...", end=" ", flush=True)
-    erc = _erc(cov, tickers)
-    print("✅")
-
-    print("  ⚙️  DLS (LSTM)...", end=" ", flush=True)
-    dls = _dls_portfolio(ret_media, cov, tickers)
-    print("✅")
-
-    print("  ⚙️  DeepStatArb...", end=" ", flush=True)
-    dsa = _deepstatarb(ret_media, cov, tickers)
-    print("✅")
-
-    # ── Portfólio atual ───────────────────────────────────────────────────────
-    w_atual = np.array([pesos_atuais.get(t, 0) for t in tickers], dtype=float)
-    w_atual = w_atual / w_atual.sum() if w_atual.sum() > 1e-8 else np.ones(n) / n
-    r_at, v_at, sh_at = _stats_portfolio(w_atual, ret_media, cov)
-    portfolio_atual = {
-        "pesos":  dict(zip(tickers, [round(float(x), 6) for x in w_atual])),
-        "ret":    round(r_at, 6),
-        "vol":    round(v_at, 6),
-        "sharpe": round(sh_at, 6),
-    }
-
-    # ── Correlações ───────────────────────────────────────────────────────────
     correlacoes = ret_df.corr()
+    oos_data    = _oos(ret_df, ms.get("pesos", {}) if ms else {})
 
-    # ── OOS validation ────────────────────────────────────────────────────────
-    oos = _oos_validation(ret_df, ms.get("pesos", {})) if ms else {}
+    # Wrappers
+    res_ms  = PortfolioResult(ms,  pa_dict) if ms  else PortfolioResult({})
+    res_mv  = PortfolioResult(mv,  pa_dict) if mv  else PortfolioResult({})
+    res_rp  = PortfolioResult(rp,  pa_dict) if rp  else PortfolioResult({})
+    res_erc = PortfolioResult(erc, pa_dict) if erc else PortfolioResult({})
+    res_dls = PortfolioResult(dls, pa_dict) if dls else PortfolioResult({})
+    res_dsa = PortfolioResult(dsa, pa_dict) if dsa else PortfolioResult({})
+    res_pa  = PortfolioResult({"pesos": pa_dict, "ret": r_at, "vol": v_at, "sharpe": sh_at}, pa_dict)
 
-    # Pesos atuais como dict para calcular delta_pesos
-    pa_dict = {t: float(w_atual[i]) for i, t in enumerate(tickers)}
+    # MonteCarloResult com atributos em DECIMAL (dashboard.py multiplica por 100 internamente)
+    mc_obj = MonteCarloResult(
+        vols    = mc_vols,
+        rets    = mc_rets,
+        sharpes = mc_sharpes,
+        vol_at  = v_at,
+        ret_at  = r_at,
+        sh_at   = sh_at,
+    )
 
-    # Envolver em PortfolioResult para compatibilidade com deep_portfolios.py
-    return {
-        "tickers":             tickers,
-        "mc_portfolios":       mc,
-        "fronteira_eficiente": ef,
-        "max_sharpe":          PortfolioResult(ms,  pa_dict) if ms  else PortfolioResult({}),
-        "min_var":             PortfolioResult(mv,  pa_dict) if mv  else PortfolioResult({}),
-        "risk_parity":         PortfolioResult(rp,  pa_dict) if rp  else PortfolioResult({}),
-        "erc":                 PortfolioResult(erc, pa_dict) if erc else PortfolioResult({}),
-        "dls":                 PortfolioResult(dls, pa_dict) if dls else PortfolioResult({}),
-        "deepstatarb":         PortfolioResult(dsa, pa_dict) if dsa else PortfolioResult({}),
-        "portfolio_atual":     PortfolioResult(portfolio_atual, pa_dict),
-        "correlacoes":         correlacoes,
-        "oos":                 oos,
-        "n_simulacoes":        n_simulacoes,
-    }
+    return ResultadoMPT({
+        # ── Chaves exigidas pelo dashboard.py ──────────────────────────────────
+        "monte_carlo":     mc_obj,
+        "max_sharpe":      res_ms,
+        "min_variancia":   res_mv,
+        "risk_parity":     res_rp,
+        "corr_matrix":     correlacoes,
+        "tickers":         tickers,
+        "fronteira_vols":  ef_v,    # lista em decimal
+        "fronteira_rets":  ef_r,    # lista em decimal
+
+        # ── Aliases extras ─────────────────────────────────────────────────────
+        "mc_portfolios":        mc_obj,
+        "mc":                   mc_obj,
+        "min_var":              res_mv,
+        "min_variance":         res_mv,
+        "erc":                  res_erc,
+        "dls":                  res_dls,
+        "deepstatarb":          res_dsa,
+        "portfolio_atual":      res_pa,
+        "correlacoes":          correlacoes,
+        "fronteira_eficiente":  {"vols": ef_v, "rets": ef_r},
+        "oos":                  oos_data,
+        "n_simulacoes":         n_simulacoes,
+        "estimativa_retornos":   estimativa_meta,
+    })
 
 
-# ── 12. Formatação para o prompt Claude ──────────────────────────────────────
-
-def formatar_mpt_para_prompt(resultado: dict) -> str:
+# ── Formatação para o prompt ───────────────────────────────────────────────────
+def formatar_mpt_para_prompt(resultado) -> str:
     if not resultado:
         return ""
 
-    def fmt(d, key, scale=1, pct=True):
-        # Suporta PortfolioResult (atributos), dict e objetos genéricos
+    def pct(obj, attr, scale=100):
         try:
-            if hasattr(d, key):
-                v = getattr(d, key)
-            elif isinstance(d, dict):
-                v = d.get(key, 0)
+            v = getattr(obj, attr, None)
+            if v is None and isinstance(obj, dict):
+                v = obj.get(attr, 0)
+            return f"{float(v)*scale:.1f}%"
+        except Exception:
+            return "N/A"
+
+    def sh(obj):
+        try:
+            v = getattr(obj, "sharpe", None) or (obj.get("sharpe") if isinstance(obj, dict) else 0)
+            return f"{float(v):.3f}"
+        except Exception:
+            return "N/A"
+
+    def pesos_top(obj):
+        try:
+            if hasattr(obj, "pesos_dict") and obj.pesos_dict:
+                p = obj.pesos_dict
+            elif hasattr(obj, "tickers") and obj.tickers:
+                p = dict(zip(obj.tickers, obj.pesos))
             else:
-                v = 0
-            if callable(v):
-                try: v = v()
-                except: v = 0
-            v = float(v) * scale
-            return f"{v:.1f}%" if pct else f"{v:.3f}"
-        except:
+                return "N/A"
+            top = sorted(p.items(), key=lambda x: x[1], reverse=True)[:5]
+            return ", ".join(f"{t}:{v*100:.1f}%" for t, v in top)
+        except Exception:
             return "N/A"
 
-    ms  = resultado.get("max_sharpe",    {})
-    mv  = resultado.get("min_var",       {})
-    rp  = resultado.get("risk_parity",   {})
-    erc = resultado.get("erc",           {})
-    dls = resultado.get("dls",           {})
-    dsa = resultado.get("deepstatarb",   {})
-    pa  = resultado.get("portfolio_atual",{})
-    oos = resultado.get("oos",           {})
-    n   = resultado.get("n_simulacoes", N_SIMULACOES)
-
-    def pesos_str(d):
-        if not d:
-            return "N/A"
-        p = d.pesos if hasattr(d, 'pesos') else d.get("pesos", {}) if isinstance(d, dict) else {}
-        if not p:
-            return "N/A"
-        top = sorted(p.items(), key=lambda x: x[1], reverse=True)[:5]
-        return ", ".join(f"{t}:{v*100:.1f}%" for t,v in top)
+    ms  = resultado["max_sharpe"]
+    mv  = resultado["min_variancia"]
+    rp  = resultado["risk_parity"]
+    erc = resultado["erc"]
+    dls = resultado["dls"]
+    dsa = resultado["deepstatarb"]
+    pa  = resultado["portfolio_atual"]
+    oos = resultado["oos"] or {}
+    n   = resultado["n_simulacoes"] or N_SIMULACOES
 
     return f"""
 === ANÁLISE MPT / DEEP LEARNING ({n:,} simulações Monte Carlo) ===
 
 PORTFÓLIO ATUAL:
-  Retorno esperado: {fmt(pa,'ret',100)}
-  Volatilidade:     {fmt(pa,'vol',100)}
-  Sharpe Ratio:     {fmt(pa,'sharpe',1,False)}
+  Retorno esperado: {pct(pa,'retorno')}  Volatilidade: {pct(pa,'volatilidade')}  Sharpe: {sh(pa)}
 
 PORTFÓLIOS ÓTIMOS:
-  Máx. Sharpe  → ret {fmt(ms,'ret',100)} | vol {fmt(ms,'vol',100)} | Sharpe {fmt(ms,'sharpe',1,False)}
-    Pesos: {pesos_str(ms)}
-  Mín. Variância → ret {fmt(mv,'ret',100)} | vol {fmt(mv,'vol',100)} | Sharpe {fmt(mv,'sharpe',1,False)}
-    Pesos: {pesos_str(mv)}
-  Risk Parity  → ret {fmt(rp,'ret',100)} | vol {fmt(rp,'vol',100)} | Sharpe {fmt(rp,'sharpe',1,False)}
-  ERC          → ret {fmt(erc,'ret',100)} | vol {fmt(erc,'vol',100)} | Sharpe {fmt(erc,'sharpe',1,False)}
-  DLS (LSTM)   → ret {fmt(dls,'ret',100)} | vol {fmt(dls,'vol',100)} | Sharpe {fmt(dls,'sharpe',1,False)}
-  DeepStatArb  → ret {fmt(dsa,'ret',100)} | vol {fmt(dsa,'vol',100)} | Sharpe {fmt(dsa,'sharpe',1,False)}
+  Máx. Sharpe    → ret esperado {pct(ms,'retorno')} | vol esperada {pct(ms,'volatilidade')} | Sharpe esperado {sh(ms)}
+    Pesos: {pesos_top(ms)}
+  Mín. Variância → ret esperado {pct(mv,'retorno')} | vol esperada {pct(mv,'volatilidade')} | Sharpe esperado {sh(mv)}
+    Pesos: {pesos_top(mv)}
+  Risk Parity    → ret esperado {pct(rp,'retorno')} | vol esperada {pct(rp,'volatilidade')} | Sharpe esperado {sh(rp)}
+  ERC            → ret esperado {pct(erc,'retorno')} | vol esperada {pct(erc,'volatilidade')} | Sharpe esperado {sh(erc)}
+  DLS (LSTM)     → ret esperado {pct(dls,'retorno')} | vol esperada {pct(dls,'volatilidade')} | Sharpe esperado {sh(dls)}
+  DeepStatArb    → ret esperado {pct(dsa,'retorno')} | vol esperada {pct(dsa,'volatilidade')} | Sharpe esperado {sh(dsa)}
 
 VALIDAÇÃO OUT-OF-SAMPLE:
   Sharpe in-sample: {oos.get('sharpe_in','N/A')}
   Sharpe OOS:       {oos.get('sharpe_out','N/A')}
   Retorno OOS/ano:  {oos.get('retorno_pct','N/A')}%
-  Volatilidade OOS: {oos.get('vol_pct','N/A')}%
 """.strip()
 
 
-# ── 13. Exibição no terminal ──────────────────────────────────────────────────
-
-def exibir_mpt_terminal(resultado: dict) -> None:
+# ── Exibição no terminal ───────────────────────────────────────────────────────
+def exibir_mpt_terminal(resultado) -> None:
     if not resultado:
         return
-
     try:
         from rich.console import Console
         from rich.table import Table
-        from rich.rule import Rule
         from rich import box
-
         console = Console()
-        console.print(Rule("[bold cyan]Otimização de Portfólio — MPT + Deep Learning[/bold cyan]", style="cyan"))
-        console.print()
 
         table = Table(box=box.SIMPLE, header_style="bold dim", show_lines=False)
-        table.add_column("Estratégia",  style="bold white", min_width=14)
-        table.add_column("Retorno/ano", justify="right")
-        table.add_column("Volatilidade",justify="right")
-        table.add_column("Sharpe",      justify="right")
-        table.add_column("Top Pesos",   style="dim")
-
-        def r(d, k, sc=1, pct=True):
-            try:
-                if hasattr(d, k):
-                    v = getattr(d, k)
-                elif isinstance(d, dict):
-                    v = d.get(k, 0)
-                else:
-                    v = 0
-                v = float(v) * sc
-                return f"{v:+.1f}%" if pct else f"{v:.3f}"
-            except:
-                return "N/A"
-
-        def tp(d):
-            if not d: return ""
-            p = d.pesos if hasattr(d, 'pesos') else d.get("pesos", {}) if isinstance(d, dict) else {}
-            if not p: return ""
-            return " ".join(f"{t}:{v*100:.0f}%" for t,v in sorted(p.items(), key=lambda x:-x[1])[:3])
-
-        pa  = resultado.get("portfolio_atual", {})
-        ms  = resultado.get("max_sharpe",      {})
-        mv  = resultado.get("min_var",         {})
-        rp  = resultado.get("risk_parity",     {})
-        erc = resultado.get("erc",             {})
-        dls = resultado.get("dls",             {})
-        dsa = resultado.get("deepstatarb",     {})
+        table.add_column("Estratégia",   style="bold white", min_width=14)
+        table.add_column("Retorno/ano",  justify="right")
+        table.add_column("Volatilidade", justify="right")
+        table.add_column("Sharpe",       justify="right")
 
         rows = [
-            ("Atual",       pa,  "cyan"),
-            ("Max Sharpe",  ms,  "green"),
-            ("Min Var",     mv,  "blue"),
-            ("Risk Parity", rp,  "yellow"),
-            ("ERC",         erc, "magenta"),
-            ("DLS (LSTM)",  dls, "bright_cyan"),
-            ("DeepStatArb", dsa, "bright_magenta"),
+            ("Atual",       resultado["portfolio_atual"], "cyan"),
+            ("Max Sharpe",  resultado["max_sharpe"],      "green"),
+            ("Min Var",     resultado["min_variancia"],   "blue"),
+            ("Risk Parity", resultado["risk_parity"],     "yellow"),
+            ("ERC",         resultado["erc"],             "magenta"),
+            ("DLS (LSTM)",  resultado["dls"],             "bright_cyan"),
+            ("DeepStatArb", resultado["deepstatarb"],     "bright_magenta"),
         ]
 
-        best_sh = max((d.get("sharpe",0) for _,d,_ in rows if d), default=0)
-
-        for nome, d, cor in rows:
-            sh = d.get("sharpe", 0) if d else 0
-            marker = " ★" if d and abs(float(sh) - best_sh) < 1e-6 else ""
+        for nome, obj, cor in rows:
+            if not obj:
+                continue
+            r  = getattr(obj, "retorno",      0) or 0
+            v  = getattr(obj, "volatilidade", 0) or 0
+            sh = getattr(obj, "sharpe",       0) or 0
             table.add_row(
-                f"[{cor}]{nome}{marker}[/{cor}]",
-                f"[{'green' if d and d.get('ret',0)>0 else 'red'}]{r(d,'ret',100)}[/{'green' if d and d.get('ret',0)>0 else 'red'}]",
-                r(d,"vol",100),
-                f"[bold]{r(d,'sharpe',1,False)}[/bold]" if d else "N/A",
-                tp(d),
+                f"[{cor}]{nome}[/{cor}]",
+                f"[{'green' if r>=0 else 'red'}]{r*100:+.1f}%[/{'green' if r>=0 else 'red'}]",
+                f"{v*100:.1f}%",
+                f"[bold]{sh:.3f}[/bold]",
             )
 
         console.print(table)
-
-        n = resultado.get("n_simulacoes", N_SIMULACOES)
-        oos = resultado.get("oos", {})
-        console.print(f"  [dim]Monte Carlo: {n:,} simulações  |  OOS Sharpe: {oos.get('sharpe_out','N/A')}  |  OOS Retorno: {oos.get('retorno_pct','N/A')}%[/dim]\n")
-
-    except ImportError:
-        _exibir_simples(resultado)
-
-
-def _exibir_simples(resultado: dict) -> None:
-    print("\n=== MPT + Deep Learning ===")
-    for nome, key in [("Max Sharpe","max_sharpe"),("Min Var","min_var"),
-                      ("Risk Parity","risk_parity"),("ERC","erc"),
-                      ("DLS","dls"),("DeepStatArb","deepstatarb")]:
-        d = resultado.get(key, {})
-        if d:
-            print(f"  {nome}: ret={d.get('ret',0)*100:.1f}% vol={d.get('vol',0)*100:.1f}% sh={d.get('sharpe',0):.3f}")
-    print()
+        oos = resultado["oos"] or {}
+        console.print(f"  [dim]OOS Sharpe: {oos.get('sharpe_out','N/A')} | OOS Retorno: {oos.get('retorno_pct','N/A')}%[/dim]\n")
+    except Exception as e:
+        print(f"exibir_mpt_terminal: {e}")

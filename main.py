@@ -131,45 +131,45 @@ def _mdi(txt: str) -> str:
 
 
 def _abrir_dashboard_servidor(caminho_html: str, porta: int = 8765):
-    """
-    Serve o dashboard via HTTP local para que o Plotly CDN funcione.
-    Evita bloqueio de scripts ao abrir como file://.
-    """
     import os
-    pasta  = os.path.dirname(os.path.abspath(caminho_html))
+    import webbrowser
+    import http.server
+    import threading
+    import socketserver
+
+    pasta = os.path.dirname(os.path.abspath(caminho_html))
     arquivo = os.path.basename(caminho_html)
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=pasta, **kwargs)
-        def log_message(self, format, *args):
-            pass  # silencia logs
 
-    # Tenta porta, se ocupada tenta próximas
+        def log_message(self, format, *args):
+            pass
+
     httpd = None
     porta_usada = porta
+
     for p in range(porta, porta + 10):
         try:
+            socketserver.TCPServer.allow_reuse_address = True
             httpd = socketserver.TCPServer(("", p), Handler)
-            httpd.allow_reuse_address = True
             porta_usada = p
             break
         except OSError:
             continue
+
     if httpd is None:
-        webbrowser.open(f"file:///{os.path.abspath(caminho_html)}")
-        return caminho_html
-    t = threading.Thread(target=httpd.serve_forever, daemon=False)
+        url = f"file:///{os.path.abspath(caminho_html).replace(os.sep, '/')}"
+        webbrowser.open(url)
+        return url
+
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
+
     url = f"http://localhost:{porta_usada}/{arquivo}"
     webbrowser.open(url)
-    console.print(f"\n  🌐 [bold cyan]Dashboard:[/bold cyan] [link]{url}[/link]")
-    console.print("  [dim]Pressione Ctrl+C para encerrar...[/dim]\n")
-    try:
-        t.join()
-    except KeyboardInterrupt:
-        httpd.shutdown()
-        console.print("\n  [dim]Servidor encerrado.[/dim]")
+    print(f"Dashboard: {url}")
     return url
 
 
@@ -296,113 +296,6 @@ def exibir_historico_ordens(ordens: list[dict]):
         )
     console.print(table)
     console.print()
-
-
-def _garantir_secoes_completas(caminho_dash: str):
-    """
-    Verifica se o dashboard tem todas as seções e dados corretos.
-    Injeta do template base dia 16: ERC+Pizza+Geo+Delta+Screener e Monte Carlo com dados reais.
-    """
-    TEMPLATE_FILENAME = "dashboard_20260416_2004.html"
-    # Marcadores para detectar seções faltando
-    SECOES_CHECK = ['id="chart-erc-sharpe"', 'id="chart-atual-pizza"', 'var estrategias']
-    # Bloco completo ERC+Pizza+Geo+Delta+Screener no template
-    BLOCO_START  = '<div class="card" style="grid-column: 1 / -1;">\n    <div class="card-title">\U0001f4c8 Comparativo de Estratégias'
-    ANALISE_CARD = '<div class="card" style="grid-column: 1 / -1; margin-top: 8px;">'
-    # Monte Carlo
-    MC_START     = "// ── Monte Carlo + Fronteira Eficiente"
-    NEXT_SCRIPT  = "\n\n<script>"
-
-    try:
-        html = open(caminho_dash, encoding="utf-8").read()
-        falta_erc  = any(s not in html for s in SECOES_CHECK)
-        mc_zerado  = 'x: [0],' in html and MC_START in html
-
-        if not falta_erc and not mc_zerado:
-            return
-
-        # Localizar template base
-        from pathlib import Path
-        candidatos = [
-            Path(caminho_dash).parent / TEMPLATE_FILENAME,
-            Path.cwd() / TEMPLATE_FILENAME,
-            Path.cwd() / "outputs" / TEMPLATE_FILENAME,
-        ]
-        try:
-            candidatos += list(Path.cwd().glob(f"**/{TEMPLATE_FILENAME}"))
-        except Exception:
-            pass
-
-        template_path = next((c for c in candidatos if c.exists()), None)
-        if not template_path:
-            console.print("  [dim yellow]⚠️  Template base não encontrado.[/dim yellow]")
-            return
-
-        html16 = template_path.read_text(encoding="utf-8")
-        corrigiu = []
-
-        # 1. Injetar bloco ERC+Pizza+Geo+Delta+Screener
-        if falta_erc:
-            idx_s = html16.find(BLOCO_START)
-            idx_e = html16.find(ANALISE_CARD)
-            if idx_s > 0 and idx_e > idx_s:
-                bloco = html16[idx_s:idx_e]
-                # Inserir antes do card de análise ou antes de </body>
-                idx_ins = html.find(ANALISE_CARD)
-                if idx_ins == -1:
-                    idx_ins = html.rfind("</body>")
-                if idx_ins > 0:
-                    html = html[:idx_ins] + "\n" + bloco + "\n" + html[idx_ins:]
-                    corrigiu.append("ERC/Pizza/Geo")
-
-        # 2. Corrigir Monte Carlo zerado
-        if mc_zerado:
-            idx_mc16_s = html16.find(MC_START)
-            idx_mc16_e = html16.find(NEXT_SCRIPT, idx_mc16_s)
-            idx_mc_s   = html.find(MC_START)
-            idx_mc_e   = html.find(NEXT_SCRIPT, idx_mc_s)
-            if all(i > 0 for i in [idx_mc16_s, idx_mc16_e, idx_mc_s, idx_mc_e]):
-                html = html[:idx_mc_s] + html16[idx_mc16_s:idx_mc16_e] + html[idx_mc_e:]
-                corrigiu.append("Monte Carlo")
-
-        if corrigiu:
-            open(caminho_dash, "w", encoding="utf-8").write(html)
-            console.print(f"  [dim]📊 Corrigido: {', '.join(corrigiu)}.[/dim]")
-
-    except Exception as e:
-        console.print(f"  [dim yellow]⚠️  _garantir_secoes_completas: {e}[/dim yellow]")
-
-
-def _embutir_plotly(caminho_html: str):
-    """Substitui o CDN do Plotly por script inline, tornando o HTML autônomo."""
-    import urllib.request
-    PLOTLY_TAG = '<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>'
-    PLOTLY_URL = "https://cdn.plot.ly/plotly-2.27.0.min.js"
-    CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".plotly_cache.js")
-
-    try:
-        html = open(caminho_html, encoding="utf-8").read()
-        if PLOTLY_TAG not in html:
-            return  # já embutido ou tag diferente
-
-        # Tentar cache local primeiro
-        js = None
-        if os.path.exists(CACHE):
-            js = open(CACHE, encoding="utf-8").read()
-        else:
-            try:
-                with urllib.request.urlopen(PLOTLY_URL, timeout=15) as r:
-                    js = r.read().decode("utf-8")
-                open(CACHE, "w", encoding="utf-8").write(js)
-            except Exception:
-                return  # sem internet — mantém CDN, usa servidor HTTP
-
-        if js:
-            html = html.replace(PLOTLY_TAG, f"<script>\n{js}\n</script>", 1)
-            open(caminho_html, "w", encoding="utf-8").write(html)
-            console.print("  [dim]📦 Plotly embutido — dashboard funciona offline.[/dim]")
-    except Exception:
-        pass  # falha silenciosa — não bloqueia o fluxo
 
 
 def main():
@@ -534,7 +427,8 @@ def main():
                 )
             if mpt_resultado and mpt_resultado.get("erc"):
                 adicionar_painel_erc(caminho_dash, mpt_resultado)
-            adicionar_resumo_estrategias(caminho_dash, mpt_resultado)
+            if mpt_resultado:
+                adicionar_resumo_estrategias(caminho_dash, mpt_resultado)
             try:
                 adicionar_curva_recomendada(caminho_dash, mpt_resultado, retornos_hist)
             except Exception:
@@ -593,6 +487,7 @@ def main():
             )
         if mpt_resultado and mpt_resultado.get("erc"):
             adicionar_painel_erc(caminho_dash, mpt_resultado)
+        if mpt_resultado:
             adicionar_resumo_estrategias(caminho_dash, mpt_resultado)
         try:
             adicionar_curva_recomendada(caminho_dash, mpt_resultado, retornos_hist)
@@ -601,9 +496,6 @@ def main():
         # Atualiza análise AI (converte markdown → HTML e injeta no card final)
         analise_html = _md_to_html(resultado.get("analise", ""))
         adicionar_plano_realocacao_html(caminho_dash, analise_html)
-        # Embutir Plotly inline para o HTML funcionar sem servidor
-        _garantir_secoes_completas(caminho_dash)
-        _embutir_plotly(caminho_dash)
         console.print(f"\n  ✅ [bold green]Dashboard gerado:[/bold green] [cyan]{caminho_dash}[/cyan]")
         url = _abrir_dashboard_servidor(caminho_dash)
 
